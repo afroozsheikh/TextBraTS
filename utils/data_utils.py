@@ -32,6 +32,20 @@ class LoadNumpyd(MapTransform):
             d[key] = np.squeeze(d[key],axis=0)
         return d
 
+# Save original file paths before loading
+class SaveImagePathd(MapTransform):
+    def __init__(self, keys):
+        super().__init__(keys)
+
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            # Save the original path before it gets loaded
+            if key in d:
+                image_path = d[key][0] if isinstance(d[key], list) else d[key]
+                d[f"{key}_path"] = image_path
+        return d
+
 # Load atlas masks for spatial prompting
 class LoadAtlasMaskd(MapTransform):
     def __init__(self, keys, atlas_masks_dir):
@@ -42,8 +56,14 @@ class LoadAtlasMaskd(MapTransform):
         import nibabel as nib
         d = dict(data)
         for key in self.keys:
-            # Extract sample ID from the image path
-            image_path = d.get("image")[0] if isinstance(d.get("image"), list) else d.get("image")
+            # Extract sample ID from the saved image path
+            image_path = d.get("image_path", None)
+
+            if image_path is None:
+                print(f"Warning: image_path not found in data dict, using whole brain")
+                d[key] = np.ones((3, 128, 128, 128), dtype=np.float32)
+                continue
+
             sample_id = os.path.basename(os.path.dirname(image_path))
 
             # Load the atlas mask
@@ -147,10 +167,16 @@ def get_loader(args):
     load_atlas = hasattr(args, 'spatial_prompting') and args.spatial_prompting
 
     # Build train transform list
-    train_transform_list = [
+    train_transform_list = []
+
+    # Save image path before loading if we need atlas masks
+    if load_atlas:
+        train_transform_list.append(SaveImagePathd(keys=["image"]))
+
+    train_transform_list.extend([
         transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
         LoadNumpyd(keys=["text_feature"]),
-    ]
+    ])
 
     if load_atlas:
         train_transform_list.append(
@@ -173,10 +199,16 @@ def get_loader(args):
     train_transform = transforms.Compose(train_transform_list)
 
     # Build val transform list
-    val_transform_list = [
+    val_transform_list = []
+
+    # Save image path before loading if we need atlas masks
+    if load_atlas:
+        val_transform_list.append(SaveImagePathd(keys=["image"]))
+
+    val_transform_list.extend([
         transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
         LoadNumpyd(keys=["text_feature"]),
-    ]
+    ])
 
     if load_atlas:
         val_transform_list.append(
@@ -193,10 +225,16 @@ def get_loader(args):
     val_transform = transforms.Compose(val_transform_list)
 
     # Build test transform list
-    test_transform_list = [
+    test_transform_list = []
+
+    # Save image path before loading if we need atlas masks
+    if load_atlas:
+        test_transform_list.append(SaveImagePathd(keys=["image"]))
+
+    test_transform_list.extend([
         transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
         LoadNumpyd(keys=["text_feature"]),
-    ]
+    ])
 
     if load_atlas:
         test_transform_list.append(

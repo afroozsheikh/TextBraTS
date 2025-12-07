@@ -230,6 +230,13 @@ class TextSwinUNETR(nn.Module):
         self.out = UnetOutBlock(
             spatial_dims=spatial_dims, in_channels=feature_size, out_channels=out_channels
         )  # type: ignore
+
+        # Learnable spatial prompting weight (soft gating)
+        # Alpha controls how much to weight atlas masks vs allowing predictions everywhere
+        # Alpha = 1.0: Hard masking (full trust in atlas)
+        # Alpha = 0.5: Equal weight to atlas and non-atlas regions
+        # Alpha = 0.0: No masking (ignore atlas)
+        self.spatial_prompt_alpha = nn.Parameter(torch.tensor(0.7))  # Initialize at 0.7
         
 
     def load_from(self, weights):
@@ -302,12 +309,20 @@ class TextSwinUNETR(nn.Module):
         out = self.decoder1(dec0, enc0)
         logits = self.out(out)
 
-        # Apply atlas mask as spatial attention (Option B: soft gating)
+        # Apply atlas mask as soft spatial attention (learnable gating)
         if atlas_mask is not None:
-            # Multiply predictions by atlas mask to encourage predictions
-            # only in anatomically plausible regions
+            # Soft gating: blend between atlas-guided and unrestricted predictions
+            # effective_mask = alpha * atlas_mask + (1 - alpha)
+            # where alpha is learned during training
+            #
+            # When alpha = 1.0: Hard masking (atlas_mask * 1 + 0) = full trust in atlas
+            # When alpha = 0.5: Equal weight (atlas_mask * 0.5 + 0.5) = balanced
+            # When alpha = 0.0: No masking (atlas_mask * 0 + 1) = ignore atlas
+            #
             # atlas_mask: (B, 3, H, W, D), logits: (B, 3, H, W, D)
-            logits = logits * atlas_mask
+            alpha = torch.clamp(self.spatial_prompt_alpha, 0.0, 1.0)  # Constrain to [0, 1]
+            effective_mask = atlas_mask * alpha + (1.0 - alpha)
+            logits = logits * effective_mask
 
         return logits
 
