@@ -31,12 +31,23 @@ def train_epoch(model, loader, optimizer, scaler, epoch, loss_func, args):
     for idx, batch_data in enumerate(loader):
         if isinstance(batch_data, list):
             data, target, text = batch_data
+            atlas_mask = None
         else:
-            data, target, text = batch_data["image"], batch_data["label"], batch_data["text_feature"]
+            data = batch_data["image"]
+            target = batch_data["label"]
+            text = batch_data["text_feature"]
+            atlas_mask = batch_data.get("atlas_mask", None)
+
         data, target, text = data.cuda(args.rank), target.cuda(args.rank), text.cuda(args.rank)
+        if atlas_mask is not None:
+            atlas_mask = atlas_mask.cuda(args.rank)
+
         optimizer.zero_grad(set_to_none=True)
         with autocast('cuda',enabled=args.amp):
-            logits = model(data,text)
+            if atlas_mask is not None:
+                logits = model(data, text, atlas_mask=atlas_mask)
+            else:
+                logits = model(data, text)
             loss = loss_func(logits, target)
         if args.amp:
             scaler.scale(loss).backward()
@@ -72,10 +83,20 @@ def val_epoch(model, loader, epoch, acc_func, args, post_sigmoid=None, post_pred
 
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
-            data, target, text = batch_data["image"], batch_data["label"], batch_data["text_feature"]
+            data = batch_data["image"]
+            target = batch_data["label"]
+            text = batch_data["text_feature"]
+            atlas_mask = batch_data.get("atlas_mask", None)
+
             data, target, text = data.cuda(args.rank), target.cuda(args.rank), text.cuda(args.rank)
+            if atlas_mask is not None:
+                atlas_mask = atlas_mask.cuda(args.rank)
+
             with autocast('cuda',enabled=args.amp):
-                logits = model(data,text)
+                if atlas_mask is not None:
+                    logits = model(data, text, atlas_mask=atlas_mask)
+                else:
+                    logits = model(data, text)
             val_labels_list = decollate_batch(target)
             val_outputs_list = decollate_batch(logits)
             val_output_convert = [post_pred(post_sigmoid(val_pred_tensor)) for val_pred_tensor in val_outputs_list]

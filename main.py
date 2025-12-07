@@ -108,6 +108,7 @@ parser.add_argument("--volume_weight", default=0.1, type=float, help="weight for
 parser.add_argument("--volume_scores_path", default="losses/volume_scores.json", type=str, help="path to volume scores JSON file")
 parser.add_argument("--use_spatial_loss", action="store_true", help="use spatial constraint loss from atlas masks")
 parser.add_argument("--spatial_weight", default=0.1, type=float, help="weight for spatial loss component (lambda)")
+parser.add_argument("--spatial_prompting", action="store_true", help="use atlas masks as spatial prompts for the network")
 parser.add_argument("--atlas_masks_dir", default="/Disk1/afrouz/Data/TextBraTS_atlas_masks", type=str, help="directory containing per-sample atlas masks")
 
 

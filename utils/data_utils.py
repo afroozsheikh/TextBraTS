@@ -32,6 +32,36 @@ class LoadNumpyd(MapTransform):
             d[key] = np.squeeze(d[key],axis=0)
         return d
 
+# Load atlas masks for spatial prompting
+class LoadAtlasMaskd(MapTransform):
+    def __init__(self, keys, atlas_masks_dir):
+        super().__init__(keys)
+        self.atlas_masks_dir = atlas_masks_dir
+
+    def __call__(self, data):
+        import nibabel as nib
+        d = dict(data)
+        for key in self.keys:
+            # Extract sample ID from the image path
+            image_path = d.get("image")[0] if isinstance(d.get("image"), list) else d.get("image")
+            sample_id = os.path.basename(os.path.dirname(image_path))
+
+            # Load the atlas mask
+            atlas_mask_path = os.path.join(
+                self.atlas_masks_dir,
+                f"{sample_id}_atlas_mask.nii.gz"
+            )
+
+            if os.path.exists(atlas_mask_path):
+                atlas_nii = nib.load(atlas_mask_path)
+                d[key] = atlas_nii.get_fdata().astype(np.float32)
+            else:
+                # Fallback: whole brain mask (all ones)
+                print(f"Warning: Atlas mask not found for {sample_id}, using whole brain")
+                d[key] = np.ones((3, 128, 128, 128), dtype=np.float32)
+
+        return d
+
 class Sampler(torch.utils.data.Sampler):
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, make_even=True):
         if num_replicas is None:
@@ -112,39 +142,75 @@ def get_loader(args):
     data_dir = args.data_dir
     datalist_json = args.json_list
     train_files, validation_files = datafold_read(datalist=datalist_json, basedir=data_dir, fold=args.fold)
-    train_transform = transforms.Compose(
-        [
-            transforms.LoadImaged(keys=["image", "label"],reader=NibabelReader()),
-            LoadNumpyd(keys=["text_feature"]),
-            transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            transforms.Resized(keys=["image","label"],spatial_size=[args.roi_x,args.roi_y,args.roi_z]),
-            transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-            transforms.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
-            transforms.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
-            transforms.ToTensord(keys=["image", "label", "text_feature"]),
-        ]
-    )
-    val_transform = transforms.Compose(
-        [
-            transforms.LoadImaged(keys=["image", "label"],reader=NibabelReader()),
-            LoadNumpyd(keys=["text_feature"]),
-            transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            transforms.Resized(keys=["image", "label"], spatial_size=[args.roi_x, args.roi_y, args.roi_z]),
-            transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-            transforms.ToTensord(keys=["image", "label", "text_feature"]),
-        ]
-    )
 
-    test_transform = transforms.Compose(
-        [
-            transforms.LoadImaged(keys=["image", "label"],reader=NibabelReader()),
-            LoadNumpyd(keys=["text_feature"]),
-            transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            transforms.Resized(keys=["image", "label"], spatial_size=[args.roi_x, args.roi_y, args.roi_z]),
-            transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-            transforms.ToTensord(keys=["image", "label", "text_feature"]),
-        ]
-    )
+    # Determine if we should load atlas masks
+    load_atlas = hasattr(args, 'spatial_prompting') and args.spatial_prompting
+
+    # Build train transform list
+    train_transform_list = [
+        transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
+        LoadNumpyd(keys=["text_feature"]),
+    ]
+
+    if load_atlas:
+        train_transform_list.append(
+            LoadAtlasMaskd(keys=["atlas_mask"], atlas_masks_dir=args.atlas_masks_dir)
+        )
+
+    train_transform_list.extend([
+        transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
+        transforms.Resized(keys=["image", "label"], spatial_size=[args.roi_x, args.roi_y, args.roi_z]),
+        transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        transforms.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
+        transforms.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
+    ])
+
+    tensor_keys = ["image", "label", "text_feature"]
+    if load_atlas:
+        tensor_keys.append("atlas_mask")
+
+    train_transform_list.append(transforms.ToTensord(keys=tensor_keys))
+    train_transform = transforms.Compose(train_transform_list)
+
+    # Build val transform list
+    val_transform_list = [
+        transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
+        LoadNumpyd(keys=["text_feature"]),
+    ]
+
+    if load_atlas:
+        val_transform_list.append(
+            LoadAtlasMaskd(keys=["atlas_mask"], atlas_masks_dir=args.atlas_masks_dir)
+        )
+
+    val_transform_list.extend([
+        transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
+        transforms.Resized(keys=["image", "label"], spatial_size=[args.roi_x, args.roi_y, args.roi_z]),
+        transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        transforms.ToTensord(keys=tensor_keys),
+    ])
+
+    val_transform = transforms.Compose(val_transform_list)
+
+    # Build test transform list
+    test_transform_list = [
+        transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
+        LoadNumpyd(keys=["text_feature"]),
+    ]
+
+    if load_atlas:
+        test_transform_list.append(
+            LoadAtlasMaskd(keys=["atlas_mask"], atlas_masks_dir=args.atlas_masks_dir)
+        )
+
+    test_transform_list.extend([
+        transforms.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
+        transforms.Resized(keys=["image", "label"], spatial_size=[args.roi_x, args.roi_y, args.roi_z]),
+        transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        transforms.ToTensord(keys=tensor_keys),
+    ])
+
+    test_transform = transforms.Compose(test_transform_list)
 
     if args.test_mode:
         val_ds = data.Dataset(data=validation_files, transform=test_transform)

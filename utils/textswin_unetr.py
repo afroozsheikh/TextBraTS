@@ -282,7 +282,13 @@ class TextSwinUNETR(nn.Module):
                 weights["state_dict"]["module.layers4.0.downsample.norm.bias"]
             )
 
-    def forward(self, x_in, text_in):
+    def forward(self, x_in, text_in, atlas_mask=None):
+        """
+        Args:
+            x_in: Input images (B, 4, H, W, D)
+            text_in: Text embeddings (B, text_dim)
+            atlas_mask: Spatial prompts from atlas (B, 3, H, W, D) - optional
+        """
         hidden_states_out = self.swinViT(x_in, text_in, self.normalize)
         enc0 = self.encoder1(x_in)
         enc1 = self.encoder2(hidden_states_out[0])
@@ -295,6 +301,14 @@ class TextSwinUNETR(nn.Module):
         dec0 = self.decoder2(dec1, enc1)
         out = self.decoder1(dec0, enc0)
         logits = self.out(out)
+
+        # Apply atlas mask as spatial attention (Option B: soft gating)
+        if atlas_mask is not None:
+            # Multiply predictions by atlas mask to encourage predictions
+            # only in anatomically plausible regions
+            # atlas_mask: (B, 3, H, W, D), logits: (B, 3, H, W, D)
+            logits = logits * atlas_mask
+
         return logits
 
 
