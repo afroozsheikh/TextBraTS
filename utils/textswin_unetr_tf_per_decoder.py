@@ -19,7 +19,7 @@ import torch.utils.checkpoint as checkpoint
 from torch.nn import LayerNorm
 
 from monai.networks.blocks import MLPBlock as Mlp
-from monai.networks.blocks import PatchEmbed, UnetOutBlock, UnetrBasicBlock, UnetrUpBlock
+from monai.networks.blocks import PatchEmbed, UnetOutBlock, UnetrBasicBlock, UnetrUpBlock, UnetrPrUpBlock, Convolution
 from monai.networks.layers import DropPath, trunc_normal_
 from monai.utils import ensure_tuple_rep, optional_import
 import math
@@ -27,7 +27,7 @@ import math
 rearrange, _ = optional_import("einops", name="rearrange")
 
 
-class TextSwinUNETR(nn.Module):
+class TextSwinUNETRTFDecoder(nn.Module):
     """
     Swin UNETR based on: "Hatamizadeh et al.,
     Swin UNETR: Swin Transformers for Semantic Segmentation of Brain Tumors in MRI Images
@@ -50,7 +50,6 @@ class TextSwinUNETR(nn.Module):
         normalize: bool = True,
         use_checkpoint: bool = False,
         spatial_dims: int = 3,
-        use_text: bool = True,
     ) -> None:
         """
         Args:
@@ -125,7 +124,6 @@ class TextSwinUNETR(nn.Module):
             use_checkpoint=use_checkpoint,
             spatial_dims=spatial_dims,
             text_dim=text_dim,
-            use_text=use_text,
         )
 
         self.encoder1 = UnetrBasicBlock(
@@ -230,8 +228,65 @@ class TextSwinUNETR(nn.Module):
         self.out = UnetOutBlock(
             spatial_dims=spatial_dims, in_channels=feature_size, out_channels=out_channels
         )  # type: ignore
-        
 
+
+        # Upsample and projection for x3_fused_out: [B, 384, 8, 8, 8] -> [B, 192, 16, 16, 16]
+        self.upsample3 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 8,
+            out_channels=feature_size * 4,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer=0,
+            stride=1
+        )
+        self.conv3 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 8,
+            out_channels=feature_size * 4,
+            kernel_size=3,
+        )
+
+        # Upsample and projection for x2_fused_out: [B, 192, 16, 16, 16] -> [B, 96, 32, 32, 32]
+        self.upsample2 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 4,
+            out_channels=feature_size * 2,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer=0,
+            stride=1
+        )
+        self.conv2 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 4,
+            out_channels=feature_size * 2,
+            kernel_size=3,
+        )
+
+        # Upsample and projection for x1_fused_out: [B, 96, 32, 32, 32] -> [B, 48, 64, 64, 64]
+        self.upsample1 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 2,
+            out_channels=feature_size,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer=0,
+            stride=1
+        )
+        self.conv1 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 2,
+            out_channels=feature_size,
+            kernel_size=3,
+        )
+        
     def load_from(self, weights):
 
         with torch.no_grad():
@@ -283,16 +338,39 @@ class TextSwinUNETR(nn.Module):
             )
 
     def forward(self, x_in, text_in):
-        hidden_states_out = self.swinViT(x_in, text_in, self.normalize)
+        hidden_states_out, hidden_states_fused = self.swinViT(x_in, text_in, self.normalize)
+
+        x1_fused_out, x2_fused_out, x3_fused_out = hidden_states_fused
+
         enc0 = self.encoder1(x_in)
         enc1 = self.encoder2(hidden_states_out[0])
         enc2 = self.encoder3(hidden_states_out[1])
         enc3 = self.encoder4(hidden_states_out[2])
-        dec4 = self.encoder10(hidden_states_out[4])
-        dec3 = self.decoder5(dec4, hidden_states_out[3])
-        dec2 = self.decoder4(dec3, enc3)
-        dec1 = self.decoder3(dec2, enc2)
-        dec0 = self.decoder2(dec1, enc1)
+        
+        
+        f_joint = self.encoder10(hidden_states_out[4])
+
+        dec3 = self.decoder5(f_joint, hidden_states_out[3])
+
+        # Process x3_fused_out: upsample, concatenate with enc3, project back
+        x3_fused_upsampled = self.upsample3(x3_fused_out)
+        enc3_joint = torch.cat([enc3, x3_fused_upsampled], dim=1)
+        enc3_joint = self.conv3(enc3_joint)
+        dec2 = self.decoder4(dec3, enc3_joint)
+
+        # Process x2_fused_out: upsample, concatenate with enc2, project back
+        x2_fused_upsampled = self.upsample2(x2_fused_out)
+        enc2_joint = torch.cat([enc2, x2_fused_upsampled], dim=1)
+        enc2_joint = self.conv2(enc2_joint)
+        dec1 = self.decoder3(dec2, enc2_joint)
+
+        # Process x1_fused_out: upsample, concatenate with enc1, project back
+        x1_fused_upsampled = self.upsample1(x1_fused_out)
+        enc1_joint = torch.cat([enc1, x1_fused_upsampled], dim=1)
+        enc1_joint = self.conv1(enc1_joint)
+        dec0 = self.decoder2(dec1, enc1_joint)
+
+
         out = self.decoder1(dec0, enc0)
         logits = self.out(out)
         return logits
@@ -893,7 +971,6 @@ class SwinTransformer(nn.Module):
         patch_norm: bool = False,
         use_checkpoint: bool = False,
         spatial_dims: int = 3,
-        use_text: bool = True,
     ) -> None:
         """
         Args:
@@ -920,8 +997,6 @@ class SwinTransformer(nn.Module):
         self.patch_norm = patch_norm
         self.window_size = window_size
         self.patch_size = patch_size
-        self.use_text = use_text
-        print(f"use_text: {self.use_text}")
         self.patch_embed = PatchEmbed(
             patch_size=self.patch_size,
             in_chans=in_chans,
@@ -959,25 +1034,46 @@ class SwinTransformer(nn.Module):
             elif i_layer == 3:
                 self.layers4.append(layer)
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
-        self.mlp_text = nn.Sequential(
-            nn.Conv1d(text_dim, 1024, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv1d(1024, 768, kernel_size=1),
-        )
 
-        self.fw_mlp = nn.Sequential(
-            nn.Conv3d(768, 768, kernel_size=1),
-            nn.ReLU())
+        # Create cross-attention modules for each feature level
+        # Feature dimensions: x0=24, x1=24, x2=48, x3=96, x4=192 (for feature_size=24)
+        # After layers with downsampling: x4 becomes 8*embed_dim = 8*24 = 192 channels
+        # self.feature_dims = [
+        #     embed_dim,           # x0: 24
+        #     embed_dim,           # x1: 24
+        #     2 * embed_dim,       # x2: 48
+        #     4 * embed_dim,       # x3: 96
+        #     8 * embed_dim        # x4: 192
+        # ]
 
-        self.mlpk = nn.Conv1d(768, 768, kernel_size=1)
-        self.mlpv = nn.Conv1d(768, 768, kernel_size=1)
+        self.feature_dims = [
+            2 * embed_dim,           
+            2 * embed_dim,           
+            4 * embed_dim,       
+            8 * embed_dim,       
+            16 * embed_dim        
+        ]
 
-        self.ly_norm = nn.LayerNorm(normalized_shape=(4,4,4))
-
-        self.mlp_text_q = nn.Conv1d(768, 768, kernel_size=1)
-        self.mlp_image_k = nn.Conv1d(768, 768, kernel_size=1)
-        self.mlp_image_v = nn.Conv1d(768, 768, kernel_size=1)
-        self.mlp_image_q = nn.Conv1d(768, 768, kernel_size=1)
+        # Cross-attention modules for each level
+        self.cross_attn_modules = nn.ModuleDict()
+        for i, feat_dim in enumerate(self.feature_dims):
+            self.cross_attn_modules[f'level_{i}'] = nn.ModuleDict({
+                'mlp_text': nn.Sequential(
+                    nn.Conv1d(text_dim, 1024, kernel_size=1),
+                    nn.ReLU(),
+                    nn.Conv1d(1024, feat_dim, kernel_size=1),
+                ),
+                'fw_mlp': nn.Sequential(
+                    nn.Conv3d(feat_dim, feat_dim, kernel_size=1),
+                    nn.ReLU()
+                ),
+                'mlpk': nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+                'mlpv': nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+                'mlp_text_q': nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+                'mlp_image_k': nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+                'mlp_image_v': nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+                'mlp_image_q': nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+            })
 
 
     def proj_out(self, x, normalize=False):
@@ -995,28 +1091,31 @@ class SwinTransformer(nn.Module):
                 x = rearrange(x, "n h w c -> n c h w")
         return x
 
-    def sequential_cross_attention(self, image_features, text_features):
-
+    def sequential_cross_attention(self, image_features, text_features, level):
         """
         Cross attention between image and text features.
         Args:
             image_features: Tensor of shape (B, C, H, W, D)
             text_features: Tensor of shape (B, T_dim, T_len)
+            level: Feature level index (0-4) to select the appropriate cross-attention modules
         Returns:
             Processed image features with the same shape as input (B, C, H, W, D)
         """
         B, C, H, W, D = image_features.shape
         _, T_dim, T_len = text_features.shape
 
+        # Get modules for this level
+        modules = self.cross_attn_modules[f'level_{level}']
+
         # Step 1: Text-to-Image Cross Attention (Text as Q, Image as K/V)
         # Project text features to Query
-        text_features = self.mlp_text(text_features.permute(0,2,1).contiguous())
-        text_q = self.mlp_text_q(text_features).permute(0,2,1).contiguous()  # Shape: (B, T_len, d_k)
+        text_features_proj = modules['mlp_text'](text_features.permute(0,2,1).contiguous())
+        text_q = modules['mlp_text_q'](text_features_proj).permute(0,2,1).contiguous()  # Shape: (B, T_len, d_k)
 
         # Flatten image features and project to Key and Value
-        image_features_flat = image_features.view(B, C, -1).contiguous()  # Shape: (B, N_img, C)
-        image_k = self.mlp_image_k(image_features_flat).permute(0,2,1).contiguous()  # Shape: (B, N_img, d_k)
-        image_v = self.mlp_image_v(image_features_flat).permute(0,2,1).contiguous()  # Shape: (B, N_img, d_v)
+        image_features_flat = image_features.view(B, C, -1).contiguous()  # Shape: (B, C, N_img)
+        image_k = modules['mlp_image_k'](image_features_flat).permute(0,2,1).contiguous()  # Shape: (B, N_img, d_k)
+        image_v = modules['mlp_image_v'](image_features_flat).permute(0,2,1).contiguous()  # Shape: (B, N_img, d_v)
 
         # Compute attention scores and weights
         attn_scores_t2i = torch.matmul(text_q, image_k.transpose(-2, -1)) / math.sqrt(
@@ -1024,15 +1123,15 @@ class SwinTransformer(nn.Module):
         attn_weights_t2i = F.softmax(attn_scores_t2i, dim=-1)  # (B, T_len, N_img)
 
         # Get attended image features
-        attended_image_features = torch.matmul(attn_weights_t2i, image_v).permute(0,2,1).contiguous()  # (B, T_len, d_v)
+        attended_image_features = torch.matmul(attn_weights_t2i, image_v).permute(0,2,1).contiguous()  # (B, d_v, T_len)
 
         # Step 2: Image-to-AttendedImage(Text) Cross Attention (Image as Q, AttendedImage as K/V)
         # Project image features to Query
-        image_q = self.mlp_image_q(image_features_flat).permute(0,2,1).contiguous()  # (B, N_img, d_k)
+        image_q = modules['mlp_image_q'](image_features_flat).permute(0,2,1).contiguous()  # (B, N_img, d_k)
 
         # Project attended text features to Key and Value
-        attended_image_k = self.mlpk(attended_image_features).permute(0,2,1).contiguous()  # (B, T_len, d_k)
-        attended_image_v = self.mlpv(attended_image_features).permute(0,2,1).contiguous()  # (B, T_len, d_v)
+        attended_image_k = modules['mlpk'](attended_image_features).permute(0,2,1).contiguous()  # (B, T_len, d_k)
+        attended_image_v = modules['mlpv'](attended_image_features).permute(0,2,1).contiguous()  # (B, T_len, d_v)
 
         # Compute attention scores and weights
         attn_scores_i2t = torch.matmul(image_q, attended_image_k.transpose(-2, -1)) / math.sqrt(
@@ -1046,10 +1145,11 @@ class SwinTransformer(nn.Module):
         attn_output_image = attn_output_image.permute(0, 2, 1).contiguous()  # (B, d_v, N_img)
         attn_output_image = attn_output_image.view(B, C, H, W, D)
 
-        # Apply layer normalization and final MLP processing
-        processed_image_features = self.ly_norm(attn_output_image)
-        processed_image_features = self.fw_mlp(processed_image_features.float())
-        processed_image_features = self.ly_norm(processed_image_features)
+        # Apply layer normalization using the spatial dimensions and final MLP processing
+        # Normalize over channel dimension
+        attn_output_image_norm = F.layer_norm(attn_output_image.permute(0, 2, 3, 4, 1), [C]).permute(0, 4, 1, 2, 3)
+        processed_image_features = modules['fw_mlp'](attn_output_image_norm.float())
+        processed_image_features = F.layer_norm(processed_image_features.permute(0, 2, 3, 4, 1), [C]).permute(0, 4, 1, 2, 3)
 
         return processed_image_features
 
@@ -1058,19 +1158,33 @@ class SwinTransformer(nn.Module):
         x0 = self.patch_embed(x)
         x0 = self.pos_drop(x0)
         x0_out = self.proj_out(x0, normalize)
-        x1 = self.layers1[0](x0.contiguous())
-        x1_out = self.proj_out(x1, normalize)
-        x2 = self.layers2[0](x1.contiguous())
-        x2_out = self.proj_out(x2, normalize)
-        x3 = self.layers3[0](x2.contiguous())
-        x3_out = self.proj_out(x3, normalize)
-        x4 = self.layers4[0](x3.contiguous())
-        # Sequential cross-attention fusion
-        if self.use_text:
-            x4 = self.sequential_cross_attention(x4, text)
 
-        x4_out = self.proj_out(x4, normalize)
-        return [x0_out, x1_out, x2_out, x3_out, x4_out]
+        x1 = self.layers1[0](x0.contiguous())
+        x1_fused = self.sequential_cross_attention(x1, text, level=1)
+        x1_out = self.proj_out(x1, normalize)
+        
+        
+        x2 = self.layers2[0](x1.contiguous())
+        x2_fused = self.sequential_cross_attention(x2, text, level=2)
+        x2_out = self.proj_out(x2, normalize)
+        
+        # Apply cross-attention to x3 (level 3)
+        x3 = self.layers3[0](x2.contiguous())
+        x3_fused = self.sequential_cross_attention(x3, text, level=3)
+        x3_out = self.proj_out(x3, normalize)
+
+        # Sequential cross-attention fusion - level 4 corresponds to x4 features
+        x4 = self.layers4[0](x3.contiguous())
+        x4_fused = self.sequential_cross_attention(x4, text, level=4)
+        x4_out = self.proj_out(x4_fused, normalize)
+
+        # Prepare fused outputs
+        x1_fused_out = self.proj_out(x1_fused, normalize)
+        x2_fused_out = self.proj_out(x2_fused, normalize)
+        x3_fused_out = self.proj_out(x3_fused, normalize)
+        x4_fused_out = x4_out  # x4_out is already using x4_fused
+
+        return [x0_out, x1_out, x2_out, x3_out, x4_out], [x1_fused_out, x2_fused_out, x3_fused_out]
 
 
 if __name__ == "__main__":

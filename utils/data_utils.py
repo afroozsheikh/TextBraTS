@@ -82,8 +82,15 @@ class Sampler(torch.utils.data.Sampler):
 def datafold_read(datalist, basedir, fold=0, key="training"):
     with open(datalist) as f:
         json_data = json.load(f)
+        
 
     json_data = json_data[key]
+
+    for entry in json_data:
+        entry["image"] = [img.replace(".gz", "") for img in entry.get("image", [])]
+        if "label" in entry:
+            entry["label"] = entry["label"].replace(".gz", "")
+
 
     for d in json_data:
         for k, v in d.items():

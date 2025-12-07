@@ -19,7 +19,7 @@ import torch.utils.checkpoint as checkpoint
 from torch.nn import LayerNorm
 
 from monai.networks.blocks import MLPBlock as Mlp
-from monai.networks.blocks import PatchEmbed, UnetOutBlock, UnetrBasicBlock, UnetrUpBlock
+from monai.networks.blocks import PatchEmbed, UnetOutBlock, UnetrBasicBlock, UnetrUpBlock, UnetrPrUpBlock, Convolution
 from monai.networks.layers import DropPath, trunc_normal_
 from monai.utils import ensure_tuple_rep, optional_import
 import math
@@ -27,7 +27,7 @@ import math
 rearrange, _ = optional_import("einops", name="rearrange")
 
 
-class TextSwinUNETR(nn.Module):
+class TextSwinUNETRJFDecoder(nn.Module):
     """
     Swin UNETR based on: "Hatamizadeh et al.,
     Swin UNETR: Swin Transformers for Semantic Segmentation of Brain Tumors in MRI Images
@@ -50,7 +50,6 @@ class TextSwinUNETR(nn.Module):
         normalize: bool = True,
         use_checkpoint: bool = False,
         spatial_dims: int = 3,
-        use_text: bool = True,
     ) -> None:
         """
         Args:
@@ -125,7 +124,6 @@ class TextSwinUNETR(nn.Module):
             use_checkpoint=use_checkpoint,
             spatial_dims=spatial_dims,
             text_dim=text_dim,
-            use_text=use_text,
         )
 
         self.encoder1 = UnetrBasicBlock(
@@ -230,7 +228,85 @@ class TextSwinUNETR(nn.Module):
         self.out = UnetOutBlock(
             spatial_dims=spatial_dims, in_channels=feature_size, out_channels=out_channels
         )  # type: ignore
+
+
+        self.jf_upsample4 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 16,
+            out_channels=feature_size * 4,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer = 1,
+            stride=1
+            )
         
+        self.jf_conv4 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 8,
+            out_channels=feature_size * 4,
+            kernel_size=3,
+            )
+
+        self.jf_upsample3 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 4,
+            out_channels=feature_size * 2,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer = 0,
+            stride=1
+            )
+        
+        self.jf_conv3 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 4,
+            out_channels=feature_size * 2,
+            kernel_size=3,
+            )
+        
+        self.jf_upsample2 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 2,
+            out_channels=feature_size,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer = 0,
+            stride=1
+            )
+        
+        self.jf_conv2 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 2,
+            out_channels=feature_size,
+            kernel_size=3,
+            )
+        
+        self.jf_upsample1 = UnetrPrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size,
+            out_channels=feature_size,
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=True,
+            num_layer = 0,
+            stride=1
+            )
+        
+        self.jf_conv1 = Convolution(
+            spatial_dims=spatial_dims,
+            in_channels=feature_size * 2,
+            out_channels=feature_size,
+            kernel_size=3,
+            )
+        
+
 
     def load_from(self, weights):
 
@@ -288,12 +364,37 @@ class TextSwinUNETR(nn.Module):
         enc1 = self.encoder2(hidden_states_out[0])
         enc2 = self.encoder3(hidden_states_out[1])
         enc3 = self.encoder4(hidden_states_out[2])
-        dec4 = self.encoder10(hidden_states_out[4])
-        dec3 = self.decoder5(dec4, hidden_states_out[3])
-        dec2 = self.decoder4(dec3, enc3)
-        dec1 = self.decoder3(dec2, enc2)
-        dec0 = self.decoder2(dec1, enc1)
-        out = self.decoder1(dec0, enc0)
+        
+        # dec4 is f_joint 
+        f_joint = self.encoder10(hidden_states_out[4])
+        
+        dec3 = self.decoder5(f_joint, hidden_states_out[3])
+
+        f_joint4 = self.jf_upsample4(f_joint)
+        enc3_joint = torch.cat((enc3, f_joint4), dim=1)
+        enc3_joint = self.jf_conv4(enc3_joint)
+        # enc3_joint = enc3_joint + enc3
+        dec2 = self.decoder4(dec3, enc3_joint)
+
+        
+        f_joint3 = self.jf_upsample3(f_joint4)
+        enc2_joint = torch.cat((enc2, f_joint3), dim=1)
+        enc2_joint = self.jf_conv3(enc2_joint)
+        # enc2_joint = enc2_joint + enc2
+        dec1 = self.decoder3(dec2, enc2_joint)
+
+        f_joint2 = self.jf_upsample2(f_joint3)
+        enc1_joint = torch.cat((enc1, f_joint2), dim=1)
+        enc1_joint = self.jf_conv2(enc1_joint)
+        # enc1_joint = enc1_joint + enc1
+        dec0 = self.decoder2(dec1, enc1_joint)
+
+        f_joint1 = self.jf_upsample1(f_joint2)
+        enc0_joint = torch.cat((enc0, f_joint1), dim=1)
+        enc0_joint = self.jf_conv1(enc0_joint)
+        # enc0_joint = enc0_joint + enc0  
+        out = self.decoder1(dec0, enc0_joint)
+
         logits = self.out(out)
         return logits
 
@@ -893,7 +994,6 @@ class SwinTransformer(nn.Module):
         patch_norm: bool = False,
         use_checkpoint: bool = False,
         spatial_dims: int = 3,
-        use_text: bool = True,
     ) -> None:
         """
         Args:
@@ -920,8 +1020,6 @@ class SwinTransformer(nn.Module):
         self.patch_norm = patch_norm
         self.window_size = window_size
         self.patch_size = patch_size
-        self.use_text = use_text
-        print(f"use_text: {self.use_text}")
         self.patch_embed = PatchEmbed(
             patch_size=self.patch_size,
             in_chans=in_chans,
@@ -1066,9 +1164,7 @@ class SwinTransformer(nn.Module):
         x3_out = self.proj_out(x3, normalize)
         x4 = self.layers4[0](x3.contiguous())
         # Sequential cross-attention fusion
-        if self.use_text:
-            x4 = self.sequential_cross_attention(x4, text)
-
+        x4 = self.sequential_cross_attention(x4,text)
         x4_out = self.proj_out(x4, normalize)
         return [x0_out, x1_out, x2_out, x3_out, x4_out]
 

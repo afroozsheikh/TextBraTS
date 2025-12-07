@@ -1,0 +1,231 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Text files
+*.txt
+!requirements.txt
+!LICENSE.txt
+!README.txt
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Training outputs and runs
+runs/
+outputs/
+output/
+checkpoints/
+results/
+wandb/
+
+# TensorBoard logs
+events.out.tfevents.*
+tensorboard_logs/
+
+# Model checkpoints and weights
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.pkl
+*.pickle
+*.npy
+*.npz
+!**/pretrained/*.pt
+!**/pretrained/*.pth
+
+# Data files (uncomment if you want to ignore data)
+# data/
+# *.nii
+# *.nii.gz
+# *.json
+# *.csv
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# SLURM output files
+slurm-*.out
+*.o[0-9]*
+*.e[0-9]*
+
+# Profiling data
+*.prof
+
+# Generated visualizations
+*.png
+*.jpg
+*.jpeg
+*.pdf
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.pdf
+!figures/**/*.png
+!figures/**/*.jpg
+!figures/**/*.pdf
+
+# Cache directories
+.cache/
+*.cache
+
+# Medical imaging specific
+*.mha
+*.mhd
+*.raw
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -12,6 +12,9 @@
 import argparse
 from utils.data_utils import get_loader
 from utils.textswin_unetr import TextSwinUNETR
+from utils.textswin_unetr_swinUnetR_V2 import TextSwinUNETR_V2
+from utils.textswin_unetr_tf_per_decoder import TextSwinUNETRTFDecoder
+from utils.textswin_unetr_jf_per_decoder import TextSwinUNETRJFDecoder
 import os
 import time
 import torch
@@ -20,6 +23,9 @@ import torch.utils.data.distributed
 from utils.utils import AverageMeter
 from monai.utils.enums import MetricReduction
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
+
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 parser = argparse.ArgumentParser(description="TextBraTS segmentation pipeline")
@@ -55,6 +61,9 @@ parser.add_argument(
     type=str,
     help="pretrained checkpoint directory",
 )
+parser.add_argument("--without_text", action="store_true", help="disable text features")
+parser.add_argument("--use_v2", action="store_true", help="use TextSwinUNETR_V2 instead of TextSwinUNETR")
+parser.add_argument("--fusion_decoder", default=None, type=str, choices=["jf", "tf"], help="text-fusion decoder type: jf (joint fusion), tf (text fusion), or none")
 
 
 def main():
@@ -66,20 +75,66 @@ def main():
     test_loader = get_loader(args)
     pretrained_dir = args.pretrained_dir
     model_name = args.pretrained_model_name
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    gpu_index = 0  # Use GPU 0 (which is physical GPU 1 due to CUDA_VISIBLE_DEVICES)
+    # device = torch.device(f"cuda:{gpu_index}" if torch.cuda.is_available() else "cpu")
+    if not torch.cuda.is_available() or gpu_index >= torch.cuda.device_count():
+        print(f"GPU {gpu_index} not available. Falling back to CPU.")
+        device = torch.device("cpu")
+    else:
+        torch.cuda.set_device(gpu_index)
+        device = torch.device(f"cuda:{gpu_index}")
+        print(f"Successfully set default device to GPU: {gpu_index}")
+        
     pretrained_pth = os.path.join(pretrained_dir, model_name)
-    model = TextSwinUNETR(
-        img_size=128,
-        in_channels=args.in_channels,
-        out_channels=args.out_channels,
-        feature_size=args.feature_size,
-        drop_rate=0.0,
-        attn_drop_rate=0.0,
-        dropout_path_rate=0.0,
-        use_checkpoint=args.use_checkpoint,
-        text_dim=768,
-    )
-    model_dict = torch.load(pretrained_pth)["state_dict"]
+
+    if args.fusion_decoder == "jf":
+        model = TextSwinUNETRJFDecoder(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            # use_text=not args.without_text,
+        )
+        print(f"Using TextSwinUNETR with Joint Fusion (JF) Decoder!")
+    elif args.fusion_decoder == "tf":
+        model = TextSwinUNETRTFDecoder(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            # use_text=not args.without_text,
+        )
+        print(f"Using TextSwinUNETR with Text Fusion (TF) Decoder!")
+    elif args.use_v2:
+        model = TextSwinUNETR_V2(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            use_text=not args.without_text,
+        )
+        print(f"Using SwinUnetR Version 2!")
+    else:
+        model = TextSwinUNETR(
+            img_size=128,
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            drop_rate=0.0,
+            attn_drop_rate=0.0,
+            dropout_path_rate=0.0,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            use_text=not args.without_text,
+        )
+        print(f"Using TextSwinUNETR!")
+    model_dict = torch.load(pretrained_pth, weights_only=False)["state_dict"]
     model.load_state_dict(model_dict, strict=False)
     model.eval()
     model.to(device)

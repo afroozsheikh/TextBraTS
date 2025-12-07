@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.u
 
 import argparse
 import os
+import datetime
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -21,13 +22,23 @@ import torch.nn.parallel
 import torch.utils.data.distributed
 from optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from trainer import run_training
+# from trainer_with_volume_loss import run_training as run_training_with_volume
 from utils.data_utils import get_loader
 from monai.losses import DiceLoss
 from monai.metrics import DiceMetric
 from utils.textswin_unetr import TextSwinUNETR
+from utils.textswin_unetr_swinUnetR_V2 import TextSwinUNETR_V2
+from utils.textswin_unetr_tf_per_decoder import TextSwinUNETRTFDecoder
+from utils.textswin_unetr_jf_per_decoder import TextSwinUNETRJFDecoder
 from monai.transforms import Activations, AsDiscrete, Compose
 from monai.utils.enums import MetricReduction
 import random
+from sam import SAM
+
+## within the program, these visible devices are re-indexed starting from 0. so devices 2 and 3 would be gpu 1 and 2 ---> A6000s 
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2, 3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
 
 
 parser = argparse.ArgumentParser(description="TextBraTS segmentation pipeline for TextBRATS image-text dataset")
@@ -89,6 +100,15 @@ parser.add_argument(
 )
 parser.add_argument("--squared_dice", action="store_true", help="use squared Dice")
 parser.add_argument("--seed", type=int, default=23,help="use random seed")
+parser.add_argument("--without_text", action="store_true", help="disable text features")
+parser.add_argument("--use_v2", action="store_true", help="use TextSwinUNETR_V2 instead of TextSwinUNETR")
+parser.add_argument("--fusion_decoder", default=None, type=str, choices=["jf", "tf"], help="text-fusion decoder type: jf (joint fusion), tf (text fusion), or none")
+parser.add_argument("--use_volume_loss", action="store_true", help="use volume loss from text reports")
+parser.add_argument("--volume_weight", default=0.1, type=float, help="weight for volume loss component")
+parser.add_argument("--volume_scores_path", default="losses/volume_scores.json", type=str, help="path to volume scores JSON file")
+parser.add_argument("--use_spatial_loss", action="store_true", help="use spatial constraint loss from atlas masks")
+parser.add_argument("--spatial_weight", default=0.1, type=float, help="weight for spatial loss component (lambda)")
+parser.add_argument("--atlas_masks_dir", default="/Disk1/afrouz/Data/TextBraTS_atlas_masks", type=str, help="directory containing per-sample atlas masks")
 
 
 def main():
@@ -116,13 +136,37 @@ def main_worker(gpu, args):
     args.gpu = gpu
     if args.distributed:
         args.rank = args.rank * args.ngpus_per_node + gpu
-        dist.init_process_group(
-            backend=args.dist_backend, init_method=args.dist_url, world_size=args.world_size, rank=args.rank
-        )
+
+        # Set environment variables for better NCCL debugging and timeout handling
+        os.environ['NCCL_DEBUG'] = 'INFO'
+        os.environ['NCCL_DEBUG_SUBSYS'] = 'ALL'
+        os.environ['NCCL_TIMEOUT'] = '1800'  # 30 minutes
+
+        print(f"[Rank {args.rank}] Initializing process group on GPU {gpu}")
+        try:
+            dist.init_process_group(
+                backend=args.dist_backend,
+                init_method=args.dist_url,
+                world_size=args.world_size,
+                rank=args.rank,
+                timeout=datetime.timedelta(seconds=1800)  # 30 minute timeout
+            )
+            print(f"[Rank {args.rank}] Process group initialized successfully")
+        except Exception as e:
+            print(f"[Rank {args.rank}] Failed to initialize process group: {e}")
+            raise
+
     torch.cuda.set_device(args.gpu)
     torch.backends.cudnn.benchmark = True
     args.test_mode = False
-    loader = get_loader(args)
+
+    print(f"[Rank {args.rank if args.distributed else 0}] Loading data...")
+    try:
+        loader = get_loader(args)
+        print(f"[Rank {args.rank if args.distributed else 0}] Data loaded successfully")
+    except Exception as e:
+        print(f"[Rank {args.rank if args.distributed else 0}] Failed to load data: {e}")
+        raise
     print(args.rank, " gpu", args.gpu)
     if args.rank == 0:
         print("Batch size is:", args.batch_size, "epochs", args.max_epochs)
@@ -130,14 +174,50 @@ def main_worker(gpu, args):
     model_name = args.pretrained_model_name
     pretrained_pth = os.path.join(pretrained_dir, model_name)
 
-    model = TextSwinUNETR(
-        img_size=(args.roi_x, args.roi_y, args.roi_z),
-        in_channels=args.in_channels,
-        out_channels=args.out_channels,
-        feature_size=args.feature_size,
-        use_checkpoint=args.use_checkpoint,
-        text_dim=768,
-    )
+    if args.fusion_decoder == "jf":
+        model = TextSwinUNETRJFDecoder(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            # use_text=not args.without_text,
+        )
+        print(f"Using TextSwinUNETR with Joint Fusion (JF) Decoder!")
+    elif args.fusion_decoder == "tf":
+        model = TextSwinUNETRTFDecoder(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            # use_text=not args.without_text,
+        )
+        print(f"Using TextSwinUNETR with Text Fusion (TF) Decoder!")
+    elif args.use_v2:
+        model = TextSwinUNETR_V2(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            use_text=not args.without_text,
+        )
+        print(f"Using SwinUnetR Version 2!")
+    else:
+        model = TextSwinUNETR(
+            img_size=(args.roi_x, args.roi_y, args.roi_z),
+            in_channels=args.in_channels,
+            out_channels=args.out_channels,
+            feature_size=args.feature_size,
+            use_checkpoint=args.use_checkpoint,
+            text_dim=768,
+            use_text=not args.without_text,
+        )
+        print(f"Using TextSwinUNETR!")
 
     if args.resume_ckpt:
         model_dict = torch.load(pretrained_pth)["state_dict"]
@@ -148,7 +228,8 @@ def main_worker(gpu, args):
 
     if args.use_ssl_pretrained:
         try:
-            model_dict = torch.load("/media/iipl/disk1/swinunetr/model_swinvit.pt",weights_only=True)
+            # model_dict = torch.load("/media/iipl/disk1/swinunetr/model_swinvit.pt",weights_only=True)
+            model_dict = torch.load("/Disk1/afrouz/Models/model_swinvit.pt",weights_only=True)
             state_dict = model_dict["state_dict"]
             # fix potential differences in state dict keys from pre-training to
             # fine-tuning
@@ -169,8 +250,10 @@ def main_worker(gpu, args):
         )
     else:
         dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
+   
     post_sigmoid = Activations(sigmoid=True)
-    post_pred = AsDiscrete(argmax=False, logit_thresh=0.5)
+    # post_pred = AsDiscrete(argmax=False, logit_thresh=0.5)
+    post_pred = AsDiscrete(argmax=False, threshold=0.5)
     dice_acc = DiceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True)
     pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Total parameters count", pytorch_total_params)
@@ -199,7 +282,8 @@ def main_worker(gpu, args):
         if args.norm_name == "batch":
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model.cuda(args.gpu)
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu, find_unused_parameters = False,)
+        # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu, find_unused_parameters = False,)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu, find_unused_parameters = True,)
     if args.optim_name == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=args.optim_lr, weight_decay=args.reg_weight)
     elif args.optim_name == "adamw":
@@ -208,6 +292,9 @@ def main_worker(gpu, args):
         optimizer = torch.optim.SGD(
             model.parameters(), lr=args.optim_lr, momentum=args.momentum, nesterov=True, weight_decay=args.reg_weight
         )
+    elif args.optim_name == "sam":
+        base_optimizer = torch.optim.SGD  # define an optimizer for the "sharpness-aware" update
+        optimizer = SAM(model.parameters(), base_optimizer, lr=0.1, momentum=0.9)
     else:
         raise ValueError("Unsupported Optimization Procedure: " + str(args.optim_name))
 
@@ -223,6 +310,7 @@ def main_worker(gpu, args):
         scheduler = None
 
     semantic_classes = ["Dice_Val_TC", "Dice_Val_WT", "Dice_Val_ET"]
+
 
     accuracy = run_training(
         model=model,
