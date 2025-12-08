@@ -166,11 +166,13 @@ def get_loader(args):
     # Determine if we should load atlas masks
     load_atlas = hasattr(args, 'spatial_prompting') and args.spatial_prompting
 
+
     # Build train transform list
     train_transform_list = []
 
     # Save image path before loading if we need atlas masks
     if load_atlas:
+        print(f"Loading atlases")
         train_transform_list.append(SaveImagePathd(keys=["image"]))
 
     train_transform_list.extend([
