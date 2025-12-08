@@ -68,7 +68,7 @@ def check_region_mapping(unique_labels):
     print("2. CHECKING REGION MAPPING")
     print("="*80)
 
-    mapping_path = "/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/region_mapping_aal_v2.json"
+    mapping_path = "/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/region_mapping_aal_v3_expanded.json"
 
     with open(mapping_path, 'r') as f:
         region_mapping = json.load(f)
