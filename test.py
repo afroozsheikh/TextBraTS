@@ -64,6 +64,8 @@ parser.add_argument(
 parser.add_argument("--without_text", action="store_true", help="disable text features")
 parser.add_argument("--use_v2", action="store_true", help="use TextSwinUNETR_V2 instead of TextSwinUNETR")
 parser.add_argument("--fusion_decoder", default=None, type=str, choices=["jf", "tf"], help="text-fusion decoder type: jf (joint fusion), tf (text fusion), or none")
+parser.add_argument("--spatial_prompting", action="store_true", help="use atlas masks as spatial prompts for the network")
+parser.add_argument("--atlas_masks_dir", default="/Disk1/afrouz/Data/TextBraTS_atlas_masks", type=str, help="directory containing per-sample atlas masks")
 
 
 def main():
@@ -147,9 +149,19 @@ def main():
 
         with torch.no_grad():
             for idx, batch_data in enumerate(loader):
-                data, target, text = batch_data["image"], batch_data["label"], batch_data["text_feature"]
+                data = batch_data["image"]
+                target = batch_data["label"]
+                text = batch_data["text_feature"]
+                atlas_mask = batch_data.get("atlas_mask", None)
+
                 data, target, text = data.cuda(), target.cuda(), text.cuda()
-                logits = model(data,text)
+                if atlas_mask is not None:
+                    atlas_mask = atlas_mask.cuda()
+
+                if atlas_mask is not None:
+                    logits = model(data, text, atlas_mask=atlas_mask)
+                else:
+                    logits = model(data, text)
                 prob = torch.sigmoid(logits)
                 prob = (prob > 0.5).int()
 
