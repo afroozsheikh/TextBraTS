@@ -19,11 +19,55 @@ Output:
     - Visualization of atlas regions
 """
 
+# SSL Certificate Workaround for Institutional Networks
+# This disables SSL verification for atlas downloads from nilearn
+# Appropriate for research environments with custom certificates
+import ssl
+import os
+
+# Method 1: Disable SSL verification globally for urllib
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# Method 2: Set environment variables for requests library (used by nilearn)
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+
+# Method 3: Monkey-patch urllib3 and requests before nilearn imports
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Patch urllib3 PoolManager to disable verification
+import functools
+_orig_poolmanager_init = urllib3.PoolManager.__init__
+
+@functools.wraps(_orig_poolmanager_init)
+def _patched_poolmanager_init(self, *args, **kwargs):
+    kwargs['cert_reqs'] = ssl.CERT_NONE
+    kwargs['assert_hostname'] = False
+    return _orig_poolmanager_init(self, *args, **kwargs)
+
+urllib3.PoolManager.__init__ = _patched_poolmanager_init
+
+# Patch requests
+import requests
+
+_orig_session_init = requests.Session.__init__
+
+@functools.wraps(_orig_session_init)
+def _patched_session_init(self, *args, **kwargs):
+    _orig_session_init(self, *args, **kwargs)
+    self.verify = False
+
+requests.Session.__init__ = _patched_session_init
+
+# Now import other modules
 import json
 import numpy as np
 import nibabel as nib
 from pathlib import Path
 import argparse
+
 from nilearn import datasets, image, plotting
 import matplotlib.pyplot as plt
 import warnings

@@ -248,7 +248,7 @@ if __name__ == "__main__":
     print("\n3. Analyzing atlas mask vs ground truth alignment...")
     analyze_mask_vs_ground_truth(
         data_dir="/Disk1/afrouz/Data/Merged",
-        atlas_masks_dir="/Disk1/afrouz/Data/TextBraTS_atlas_masks",
+        atlas_masks_dir="/Disk1/afrouz/Data/TextBraTS_atlas_masks_fixed",
         num_samples=20
     )
 
@@ -257,8 +257,8 @@ if __name__ == "__main__":
     visualize_sample_with_mask(
         sample_id="BraTS20_Training_001",
         data_dir="/Disk1/afrouz/Data/Merged",
-        atlas_masks_dir="/Disk1/afrouz/Data/TextBraTS_atlas_masks",
-        output_file="/Disk1/afrouz/Projects/TextBraTS/debug_spatial_prompting_viz.png"
+        atlas_masks_dir="/Disk1/afrouz/Data/TextBraTS_atlas_masks_fixed",
+        output_file="/Disk1/afrouz/Projects/TextBraTS/debug_spatial_prompting_fixed_viz.png"
     )
 
     print("\n" + "="*60)

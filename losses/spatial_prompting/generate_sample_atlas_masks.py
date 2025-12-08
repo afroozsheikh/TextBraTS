@@ -550,14 +550,14 @@ Examples:
     parser.add_argument(
         "--atlas_path",
         type=str,
-        default="/Disk1/afrouz/Data/TextBraTS_atlas_preprocess/brain_atlas_harvard-oxford_resampled.nii.gz",
+        default="/Disk1/afrouz/Data/TextBraTS_atlas_preprocess/brain_atlas_aal_resampled.nii.gz",
         help="Path to resampled brain atlas (128x128x128)"
     )
 
     parser.add_argument(
         "--region_mapping",
         type=str,
-        default="/Disk1/afrouz/Projects/TextBraTS/losses/spatial_loss/region_mapping.json",
+        default="/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/region_mapping_aal.json",
         help="Path to region mapping JSON"
     )
 
@@ -571,7 +571,7 @@ Examples:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/Disk1/afrouz/Data/TextBraTS_atlas_masks",
+        default="/Disk1/afrouz/Data/TextBraTS_atlas_masks_aal",
         help="Output directory for atlas masks"
     )
 
