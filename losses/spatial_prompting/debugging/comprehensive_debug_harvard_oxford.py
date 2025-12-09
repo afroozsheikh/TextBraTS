@@ -1,9 +1,9 @@
 """
-Comprehensive AAL Atlas Debugging Script
+Comprehensive Harvard-Oxford Atlas Debugging Script
 
 Checks:
 1. Atlas labels and coverage
-2. Region mapping correctness  
+2. Region mapping correctness
 3. Sample atlas masks (coverage and quality)
 4. Ground truth overlap analysis
 5. Visualization of masks vs GT
@@ -19,12 +19,12 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 
 def check_atlas():
-    """Check the AAL atlas file."""
+    """Check the Harvard-Oxford atlas file."""
     print("="*80)
-    print("1. CHECKING AAL ATLAS")
+    print("1. CHECKING HARVARD-OXFORD ATLAS")
     print("="*80)
 
-    atlas_path = "/Disk1/afrouz/Data/TextBraTS_atlas_preprocess/brain_atlas_aal_padded.nii.gz"
+    atlas_path = "/Disk1/afrouz/Data/TextBraTS_atlas_preprocess/brain_atlas_harvard-oxford_padded.nii.gz"
 
     atlas = nib.load(atlas_path)
     atlas_data = atlas.get_fdata()
@@ -68,7 +68,7 @@ def check_region_mapping(unique_labels):
     print("2. CHECKING REGION MAPPING")
     print("="*80)
 
-    mapping_path = "/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/region_mapping_aal_v3_expanded.json"
+    mapping_path = "/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/region_mapping_harvard-oxford_v2.json"
 
     with open(mapping_path, 'r') as f:
         region_mapping = json.load(f)
@@ -111,12 +111,12 @@ def check_region_mapping(unique_labels):
 
 
 def check_sample_masks(num_samples=10):
-    """Check generated AAL atlas masks."""
+    """Check generated Harvard-Oxford atlas masks."""
     print("\n" + "="*80)
     print("3. CHECKING SAMPLE ATLAS MASKS")
     print("="*80)
 
-    masks_dir = Path("/Disk1/afrouz/Data/TextBraTS_atlas_masks_aal_v3_padded")
+    masks_dir = Path("/Disk1/afrouz/Data/TextBraTS_atlas_masks_harvard-oxford_v2")
 
     if not masks_dir.exists():
         print(f"\n  ⚠️  Masks directory not found: {masks_dir}")
@@ -174,7 +174,7 @@ def check_ground_truth_overlap(num_samples=20):
     print("="*80)
 
     data_dir = Path("/Disk1/afrouz/Data/Merged")
-    masks_dir = Path("/Disk1/afrouz/Data/TextBraTS_atlas_masks_aal_v3_padded")
+    masks_dir = Path("/Disk1/afrouz/Data/TextBraTS_atlas_masks_harvard-oxford_v2")
 
     if not masks_dir.exists():
         print(f"  ⚠️  Masks directory not found")
@@ -341,8 +341,8 @@ def visualize_masks_vs_gt(num_samples=15):
     print("="*80)
 
     data_dir = Path("/Disk1/afrouz/Data/Merged")
-    masks_dir = Path("/Disk1/afrouz/Data/TextBraTS_atlas_masks_aal_v3_padded")
-    output_pdf = Path("/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/debugging/atlas_vs_gt_visualization_aal_v3_padded.pdf")
+    masks_dir = Path("/Disk1/afrouz/Data/TextBraTS_atlas_masks_harvard-oxford_v2")
+    output_pdf = Path("/Disk1/afrouz/Projects/TextBraTS/losses/spatial_prompting/debugging/atlas_vs_gt_visualization_harvard-oxford_v2.pdf")
 
     if not masks_dir.exists():
         print(f"  ⚠️  Masks directory not found")
@@ -479,7 +479,7 @@ def visualize_masks_vs_gt(num_samples=15):
 
 def main():
     print("="*80)
-    print("COMPREHENSIVE AAL ATLAS DEBUGGING")
+    print("COMPREHENSIVE HARVARD-OXFORD ATLAS DEBUGGING")
     print("="*80)
     print()
 

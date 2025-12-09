@@ -176,8 +176,29 @@ class BrainAtlasPreprocessor:
             print(f"AAL atlas: {len(self.label_names)} regions")
             print(f"Original atlas shape: {self.atlas_img.shape}")
 
+        elif self.atlas_type == 'talairach':
+            print("Downloading Talairach atlas (lobe level)...")
+            atlas = datasets.fetch_atlas_talairach(level_name='lobe')
+
+            # Handle both string path and loaded image
+            if isinstance(atlas.maps, str):
+                self.atlas_img = nib.load(atlas.maps)
+            else:
+                self.atlas_img = atlas.maps
+
+            # Create label mapping from Talairach labels
+            self.label_names = {}
+            for i, label in enumerate(atlas.labels):
+                # Talairach atlas labels match indices
+                self.label_names[i] = label
+
+            print(f"Talairach atlas: {len(self.label_names)} regions")
+            print(f"Labels: {atlas.labels}")
+            print(f"Original atlas shape: {self.atlas_img.shape}")
+            print(f"Original atlas resolution: {self.atlas_img.header.get_zooms()[:3]} mm")
+
         else:
-            raise ValueError(f"Atlas type '{self.atlas_type}' not supported. Choose 'harvard-oxford' or 'aal'")
+            raise ValueError(f"Atlas type '{self.atlas_type}' not supported. Choose 'harvard-oxford', 'aal', or 'talairach'")
 
     def resample_to_target(self, target_img, interpolation='nearest'):
         """
@@ -201,6 +222,68 @@ class BrainAtlasPreprocessor:
         print(f"Resampled atlas shape: {resampled_img.shape}")
 
         return resampled_img
+
+    def pad_to_shape(self, target_shape=(128, 128, 128)):
+        """
+        Pad the atlas to a specific target shape WITHOUT interpolation.
+        This preserves exact label IDs and sharp anatomical boundaries.
+
+        Args:
+            target_shape: Desired output shape (e.g., (128, 128, 128))
+
+        Returns:
+            Padded atlas image
+        """
+        print(f"Padding atlas to shape {target_shape}...")
+
+        # Get original data and shape
+        original_data = self.atlas_img.get_fdata()
+        original_shape = np.array(original_data.shape[:3])
+        target_shape = np.array(target_shape)
+
+        print(f"Original atlas shape: {original_shape}")
+        print(f"Target shape: {target_shape}")
+
+        # Check if target shape is larger than original
+        if np.any(target_shape < original_shape):
+            raise ValueError(f"Target shape {target_shape} must be >= original shape {original_shape}")
+
+        # Calculate padding needed (centered)
+        pad_total = target_shape - original_shape
+        pad_before = pad_total // 2
+        pad_after = pad_total - pad_before
+
+        print(f"Padding: before={pad_before}, after={pad_after}")
+
+        # Pad with zeros (background label)
+        padded_data = np.pad(
+            original_data,
+            list(zip(pad_before, pad_after)),
+            mode='constant',
+            constant_values=0
+        )
+
+        print(f"Padded atlas shape: {padded_data.shape}")
+
+        # Update affine matrix to account for padding
+        # The origin shifts by pad_before voxels
+        affine = self.atlas_img.affine.copy()
+        voxel_sizes = np.array(self.atlas_img.header.get_zooms()[:3])
+
+        # Adjust origin (translation part of affine)
+        affine[:3, 3] -= pad_before * voxel_sizes * np.sign(np.diag(affine[:3, :3]))
+
+        # Create new NIfTI image
+        padded_img = nib.Nifti1Image(padded_data.astype(np.int16), affine)
+
+        # Verify label preservation
+        original_labels = set(np.unique(original_data))
+        padded_labels = set(np.unique(padded_data))
+        assert original_labels == padded_labels, "Labels changed during padding!"
+
+        print(f"✓ Label preservation verified: {len(original_labels)} unique labels")
+
+        return padded_img
 
     def resample_to_shape(self, target_shape=(128, 128, 128), target_affine=None):
         """
@@ -243,21 +326,22 @@ class BrainAtlasPreprocessor:
 
         return resampled_img
 
-    def save_atlas(self, output_path, resampled_atlas_img):
+    def save_atlas(self, output_path, resampled_atlas_img, method='resampled'):
         """
         Save the resampled atlas and its label mapping.
 
         Args:
             output_path: Output directory path
             resampled_atlas_img: Resampled atlas NIfTI image
+            method: Processing method used ('resampled' or 'padded')
         """
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Save atlas NIfTI
-        atlas_file = output_path / f'brain_atlas_{self.atlas_type}_resampled.nii.gz'
+        atlas_file = output_path / f'brain_atlas_{self.atlas_type}_{method}.nii.gz'
         nib.save(resampled_atlas_img, str(atlas_file))
-        print(f"Saved resampled atlas to: {atlas_file}")
+        print(f"Saved {method} atlas to: {atlas_file}")
 
         # Save label mapping as JSON
         labels_file = output_path / f'atlas_labels_{self.atlas_type}.json'
@@ -373,7 +457,7 @@ def main():
         '--atlas_type',
         type=str,
         default='harvard-oxford',
-        choices=['harvard-oxford', 'aal'],
+        choices=['harvard-oxford', 'aal', 'talairach'],
         help='Type of brain atlas to use'
     )
     parser.add_argument(
@@ -393,6 +477,12 @@ def main():
         default=True,
         help='Generate visualizations of the atlas'
     )
+    parser.add_argument(
+        '--use_padding',
+        action='store_true',
+        default=False,
+        help='Use padding instead of interpolation (preserves exact label IDs)'
+    )
 
     args = parser.parse_args()
 
@@ -403,7 +493,12 @@ def main():
     preprocessor.print_label_summary()
 
     # Resample atlas
-    if args.use_reference:
+    if args.use_padding:
+        # Use padding (recommended for discrete labels)
+        print("\n⚠️  Using PADDING method (preserves exact labels)")
+        resampled_atlas = preprocessor.pad_to_shape(tuple(args.target_shape))
+        processing_method = 'padded'
+    elif args.use_reference:
         # Use a reference BraTS image
         print(f"\nUsing reference image from sample: {args.sample_id}")
         sample_dir = Path(args.data_dir) / args.sample_id
@@ -413,19 +508,24 @@ def main():
             print(f"Error: Reference image not found at {flair_path}")
             print("Falling back to target shape method...")
             resampled_atlas = preprocessor.resample_to_shape(tuple(args.target_shape))
+            processing_method = 'resampled'
         else:
             reference_img = nib.load(str(flair_path))
             print(f"Reference image shape: {reference_img.shape}")
             print(f"Reference image affine:\n{reference_img.affine}")
             resampled_atlas = preprocessor.resample_to_target(reference_img)
+            processing_method = 'resampled'
     else:
-        # Use target shape only
+        # Use target shape only (with interpolation)
+        print("\n⚠️  Using INTERPOLATION method (may blur labels)")
         resampled_atlas = preprocessor.resample_to_shape(tuple(args.target_shape))
+        processing_method = 'resampled'
 
     # Save atlas
     atlas_file, labels_file, stats_file = preprocessor.save_atlas(
         args.output_dir,
-        resampled_atlas
+        resampled_atlas,
+        method=processing_method
     )
 
     # Visualize
