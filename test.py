@@ -77,8 +77,8 @@ def main():
     test_loader = get_loader(args)
     pretrained_dir = args.pretrained_dir
     model_name = args.pretrained_model_name
-    gpu_index = 0  # Use GPU 0 (which is physical GPU 1 due to CUDA_VISIBLE_DEVICES)
-    # device = torch.device(f"cuda:{gpu_index}" if torch.cuda.is_available() else "cpu")
+    # Since CUDA_VISIBLE_DEVICES=1 is set, physical GPU 1 appears as GPU 0
+    gpu_index = 1
     if not torch.cuda.is_available() or gpu_index >= torch.cuda.device_count():
         print(f"GPU {gpu_index} not available. Falling back to CPU.")
         device = torch.device("cpu")
@@ -154,9 +154,9 @@ def main():
                 text = batch_data["text_feature"]
                 atlas_mask = batch_data.get("atlas_mask", None)
 
-                data, target, text = data.cuda(), target.cuda(), text.cuda()
+                data, target, text = data.to(device), target.to(device), text.to(device)
                 if atlas_mask is not None:
-                    atlas_mask = atlas_mask.cuda()
+                    atlas_mask = atlas_mask.to(device)
 
                 if atlas_mask is not None:
                     logits = model(data, text, atlas_mask=atlas_mask)
@@ -167,7 +167,7 @@ def main():
 
                 acc_func(y_pred=prob, y=target)
                 acc, not_nans = acc_func.aggregate()
-                acc = acc.cuda()
+                acc = acc.to(device)
 
                 run_acc.update(acc.cpu().numpy(), n=not_nans.cpu().numpy())
 

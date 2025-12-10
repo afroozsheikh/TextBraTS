@@ -37,9 +37,16 @@ from pathlib import Path
 import argparse
 import os
 from typing import List, Tuple, Optional, Dict
-import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
+
+# Matplotlib import is conditional to avoid NumPy compatibility issues
+HAS_MATPLOTLIB = False
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    pass
 
 
 class SampleAtlasMaskGenerator:
@@ -378,6 +385,10 @@ class SampleAtlasMaskGenerator:
         Returns:
             Path to saved visualization
         """
+        if not HAS_MATPLOTLIB:
+            print("  [WARNING] Matplotlib not available, skipping visualization")
+            return ""
+
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
         # Middle axial slice (z=64)

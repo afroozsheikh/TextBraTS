@@ -229,3 +229,4 @@ slurm-*.out
 .Trashes
 ehthumbs.db
 Thumbs.db
+src/spatial_prompting/debugging/deprecated/
