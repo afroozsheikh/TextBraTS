@@ -300,7 +300,11 @@ class TextSwinUNETR(nn.Module):
         enc0 = self.encoder1(x_in)
         enc1 = self.encoder2(hidden_states_out[0])
         enc2 = self.encoder3(hidden_states_out[1])
+        
+        # before fusion --> enc3 (1, 192, 16, 16, 16)
         enc3 = self.encoder4(hidden_states_out[2])
+
+        # after fusion --> dec4 (1, 768, 4, 4, 4)
         dec4 = self.encoder10(hidden_states_out[4])
         dec3 = self.decoder5(dec4, hidden_states_out[3])
         dec2 = self.decoder4(dec3, enc3)
