@@ -23,9 +23,91 @@ import torch.utils.data.distributed
 from utils.utils import AverageMeter
 from monai.utils.enums import MetricReduction
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
+import matplotlib.pyplot as plt
+import matplotlib.backends.backend_pdf
+import numpy as np
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
+
+def create_visualization_pdf(viz_data, output_path):
+    """
+    Create a PDF with visualizations of all test samples.
+    Each page shows: image, ground truth, prediction, and dice scores.
+
+    Args:
+        viz_data: List of dictionaries containing visualization data for each sample
+        output_path: Path to save the PDF file
+    """
+    pdf = matplotlib.backends.backend_pdf.PdfPages(output_path)
+
+    for sample_idx, sample in enumerate(viz_data):
+        image = sample['image'][0]  # Shape: [C, H, W, D]
+        target = sample['target'][0]  # Shape: [C, H, W, D]
+        prediction = sample['prediction'][0]  # Shape: [C, H, W, D]
+        dice_scores = sample['dice_scores']  # Shape: [3]
+        sample_name = sample['sample_name']
+
+        # Select middle slice for visualization
+        mid_slice = image.shape[-1] // 2
+
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+        avg_dice = np.mean(dice_scores)
+        fig.suptitle(f'Sample: {sample_name}\nDice Scores - TC: {dice_scores[0]:.4f}, WT: {dice_scores[1]:.4f}, ET: {dice_scores[2]:.4f}, Avg: {avg_dice:.4f}',
+                     fontsize=14, fontweight='bold')
+
+        # First row: Ground truth overlays on image
+        # Show FLAIR modality (channel 0)
+        axes[0, 0].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[0, 0].set_title('Image (FLAIR)')
+        axes[0, 0].axis('off')
+
+        # Ground truth overlays on image
+        axes[0, 1].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[0, 1].imshow(target[0, :, :, mid_slice], cmap='Reds', alpha=0.5)
+        axes[0, 1].set_title('Ground Truth - TC')
+        axes[0, 1].axis('off')
+
+        axes[0, 2].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[0, 2].imshow(target[1, :, :, mid_slice], cmap='Greens', alpha=0.5)
+        axes[0, 2].set_title('Ground Truth - WT')
+        axes[0, 2].axis('off')
+
+        axes[0, 3].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[0, 3].imshow(target[2, :, :, mid_slice], cmap='Blues', alpha=0.5)
+        axes[0, 3].set_title('Ground Truth - ET')
+        axes[0, 3].axis('off')
+
+        # Second row: Prediction overlays on image
+        axes[1, 0].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[1, 0].set_title('Image (FLAIR)')
+        axes[1, 0].axis('off')
+
+        axes[1, 1].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[1, 1].imshow(prediction[0, :, :, mid_slice], cmap='Reds', alpha=0.5)
+        axes[1, 1].set_title(f'Prediction - TC (Dice: {dice_scores[0]:.4f})')
+        axes[1, 1].axis('off')
+
+        axes[1, 2].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[1, 2].imshow(prediction[1, :, :, mid_slice], cmap='Greens', alpha=0.5)
+        axes[1, 2].set_title(f'Prediction - WT (Dice: {dice_scores[1]:.4f})')
+        axes[1, 2].axis('off')
+
+        axes[1, 3].imshow(image[0, :, :, mid_slice], cmap='gray')
+        axes[1, 3].imshow(prediction[2, :, :, mid_slice], cmap='Blues', alpha=0.5)
+        axes[1, 3].set_title(f'Prediction - ET (Dice: {dice_scores[2]:.4f})')
+        axes[1, 3].axis('off')
+
+        plt.tight_layout()
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+
+        print(f"Generated visualization page {sample_idx + 1}/{len(viz_data)}: {sample_name}")
+
+    pdf.close()
+    print(f"\nPDF saved to: {output_path}")
 
 
 parser = argparse.ArgumentParser(description="TextBraTS segmentation pipeline")
@@ -66,6 +148,7 @@ parser.add_argument("--use_v2", action="store_true", help="use TextSwinUNETR_V2 
 parser.add_argument("--fusion_decoder", default=None, type=str, choices=["jf", "tf"], help="text-fusion decoder type: jf (joint fusion), tf (text fusion), or none")
 parser.add_argument("--spatial_prompting", action="store_true", help="use atlas masks as spatial prompts for the network")
 parser.add_argument("--atlas_masks_dir", default="/Disk1/afrouz/Data/TextBraTS_atlas_masks", type=str, help="directory containing per-sample atlas masks")
+parser.add_argument("--visualize", action="store_true", help="generate PDF visualization of test results")
 
 
 def main():
@@ -141,11 +224,14 @@ def main():
     model.eval()
     model.to(device)
 
-    def val_epoch(model, loader, acc_func,  hd95_func):
+    def val_epoch(model, loader, acc_func, hd95_func, visualize=False):
         model.eval()
         start_time = time.time()
         run_acc = AverageMeter()
         run_hd95 = AverageMeter()
+
+        # Storage for visualization data
+        viz_data = [] if visualize else None
 
         with torch.no_grad():
             for idx, batch_data in enumerate(loader):
@@ -173,9 +259,8 @@ def main():
 
                 # HD95 Metric
                 hd95_func(y_pred=prob, y=target)
-                hd95 = hd95_func.aggregate()  # Assuming it returns a single value
+                hd95 = hd95_func.aggregate()
                 run_hd95.update(hd95.cpu().numpy())
-
 
                 Dice_TC = run_acc.avg[0]
                 Dice_WT = run_acc.avg[1]
@@ -183,6 +268,18 @@ def main():
                 HD95_TC = run_hd95.avg[0]
                 HD95_WT = run_hd95.avg[1]
                 HD95_ET = run_hd95.avg[2]
+
+                # Store data for visualization
+                if visualize:
+                    viz_data.append({
+                        'image': data.cpu().numpy(),
+                        'target': target.cpu().numpy(),
+                        'prediction': prob.cpu().numpy(),
+                        'dice_scores': np.array([Dice_TC, Dice_WT, Dice_ET]),
+                        'sample_name': batch_data.get('name', [f'sample_{idx}'])[0]
+                    })
+
+                
                 print(
                     "Val  {}/{}".format(idx, len(loader)),
                     ", Dice_TC:", Dice_TC,
@@ -202,11 +299,17 @@ def main():
             f"Avg Dice: {(Dice_ET + Dice_TC + Dice_WT) / 3}, "
             f"HD95_TC: {HD95_TC}, HD95_WT: {HD95_WT}, HD95_ET: {HD95_ET}, "
             f"Avg HD95: {(HD95_ET + HD95_TC + HD95_WT) / 3}\n")
-        return run_acc.avg
+        return run_acc.avg, viz_data
 
     dice_acc = DiceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True)
     hd95_acc = HausdorffDistanceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, percentile=95.0)
-    val_epoch(model, test_loader, acc_func=dice_acc,hd95_func=hd95_acc)
+    avg_dice, viz_data = val_epoch(model, test_loader, acc_func=dice_acc, hd95_func=hd95_acc, visualize=args.visualize)
+
+    # Generate PDF visualization if requested
+    if args.visualize and viz_data:
+        pdf_path = os.path.join(output_directory, 'test_visualizations.pdf')
+        print(f"\nGenerating PDF visualization with {len(viz_data)} samples...")
+        create_visualization_pdf(viz_data, pdf_path)
 
 if __name__ == "__main__":
     main()
