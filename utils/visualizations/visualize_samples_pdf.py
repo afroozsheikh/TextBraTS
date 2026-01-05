@@ -116,7 +116,12 @@ def visualize_case(data, case_name, slice_idx=None):
     # Row 1: Original modalities
     # Row 2: Modalities with segmentation overlay
     fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-    fig.suptitle(f"{case_name} - Slice {slice_idx}", fontsize=16, fontweight='bold')
+
+    # Add sample name as main title
+    fig.suptitle(f"Sample: {case_name}", fontsize=18, fontweight='bold', y=0.98)
+
+    # Add slice info as subtitle
+    fig.text(0.5, 0.94, f"Slice Index: {slice_idx}", ha='center', fontsize=12, style='italic')
 
     for idx, modality in enumerate(modalities):
         # Get data
