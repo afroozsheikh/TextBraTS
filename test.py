@@ -54,49 +54,42 @@ def create_visualization_pdf(viz_data, output_path):
 
         # Create figure with subplots
         fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-        avg_dice = np.mean(dice_scores)
-        fig.suptitle(f'Sample: {sample_name}\nDice Scores - TC: {dice_scores[0]:.4f}, WT: {dice_scores[1]:.4f}, ET: {dice_scores[2]:.4f}, Avg: {avg_dice:.4f}',
+        fig.suptitle(f'Sample: {sample_name}\nDice Scores - TC: {dice_scores[0]:.4f}, WT: {dice_scores[1]:.4f}, ET: {dice_scores[2]:.4f}, Avg: {dice_scores.mean():.4f}',
                      fontsize=14, fontweight='bold')
 
-        # First row: Ground truth overlays on image
+        # First row: Images (modalities)
         # Show FLAIR modality (channel 0)
         axes[0, 0].imshow(image[0, :, :, mid_slice], cmap='gray')
         axes[0, 0].set_title('Image (FLAIR)')
         axes[0, 0].axis('off')
 
-        # Ground truth overlays on image
-        axes[0, 1].imshow(image[0, :, :, mid_slice], cmap='gray')
-        axes[0, 1].imshow(target[0, :, :, mid_slice], cmap='Reds', alpha=0.5)
+        # Ground truth for each class
+        axes[0, 1].imshow(target[0, :, :, mid_slice], cmap='Reds', alpha=0.7)
         axes[0, 1].set_title('Ground Truth - TC')
         axes[0, 1].axis('off')
 
-        axes[0, 2].imshow(image[0, :, :, mid_slice], cmap='gray')
-        axes[0, 2].imshow(target[1, :, :, mid_slice], cmap='Greens', alpha=0.5)
+        axes[0, 2].imshow(target[1, :, :, mid_slice], cmap='Greens', alpha=0.7)
         axes[0, 2].set_title('Ground Truth - WT')
         axes[0, 2].axis('off')
 
-        axes[0, 3].imshow(image[0, :, :, mid_slice], cmap='gray')
-        axes[0, 3].imshow(target[2, :, :, mid_slice], cmap='Blues', alpha=0.5)
+        axes[0, 3].imshow(target[2, :, :, mid_slice], cmap='Blues', alpha=0.7)
         axes[0, 3].set_title('Ground Truth - ET')
         axes[0, 3].axis('off')
 
-        # Second row: Prediction overlays on image
+        # Second row: Predictions
         axes[1, 0].imshow(image[0, :, :, mid_slice], cmap='gray')
         axes[1, 0].set_title('Image (FLAIR)')
         axes[1, 0].axis('off')
 
-        axes[1, 1].imshow(image[0, :, :, mid_slice], cmap='gray')
-        axes[1, 1].imshow(prediction[0, :, :, mid_slice], cmap='Reds', alpha=0.5)
+        axes[1, 1].imshow(prediction[0, :, :, mid_slice], cmap='Reds', alpha=0.7)
         axes[1, 1].set_title(f'Prediction - TC (Dice: {dice_scores[0]:.4f})')
         axes[1, 1].axis('off')
 
-        axes[1, 2].imshow(image[0, :, :, mid_slice], cmap='gray')
-        axes[1, 2].imshow(prediction[1, :, :, mid_slice], cmap='Greens', alpha=0.5)
+        axes[1, 2].imshow(prediction[1, :, :, mid_slice], cmap='Greens', alpha=0.7)
         axes[1, 2].set_title(f'Prediction - WT (Dice: {dice_scores[1]:.4f})')
         axes[1, 2].axis('off')
 
-        axes[1, 3].imshow(image[0, :, :, mid_slice], cmap='gray')
-        axes[1, 3].imshow(prediction[2, :, :, mid_slice], cmap='Blues', alpha=0.5)
+        axes[1, 3].imshow(prediction[2, :, :, mid_slice], cmap='Blues', alpha=0.7)
         axes[1, 3].set_title(f'Prediction - ET (Dice: {dice_scores[2]:.4f})')
         axes[1, 3].axis('off')
 
@@ -262,24 +255,27 @@ def main():
                 hd95 = hd95_func.aggregate()
                 run_hd95.update(hd95.cpu().numpy())
 
+                # Store data for visualization
+                if visualize:
+                    # Compute per-sample dice scores
+                    sample_dice_metric = DiceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True)
+                    sample_dice_metric(y_pred=prob, y=target)
+                    sample_dice, _ = sample_dice_metric.aggregate()
+
+                    viz_data.append({
+                        'image': data.cpu().numpy(),
+                        'target': target.cpu().numpy(),
+                        'prediction': prob.cpu().numpy(),
+                        'dice_scores': sample_dice.cpu().numpy(),
+                        'sample_name': batch_data.get('name', [f'sample_{idx}'])[0]
+                    })
+
                 Dice_TC = run_acc.avg[0]
                 Dice_WT = run_acc.avg[1]
                 Dice_ET = run_acc.avg[2]
                 HD95_TC = run_hd95.avg[0]
                 HD95_WT = run_hd95.avg[1]
                 HD95_ET = run_hd95.avg[2]
-
-                # Store data for visualization
-                if visualize:
-                    viz_data.append({
-                        'image': data.cpu().numpy(),
-                        'target': target.cpu().numpy(),
-                        'prediction': prob.cpu().numpy(),
-                        'dice_scores': np.array([Dice_TC, Dice_WT, Dice_ET]),
-                        'sample_name': batch_data.get('name', [f'sample_{idx}'])[0]
-                    })
-
-                
                 print(
                     "Val  {}/{}".format(idx, len(loader)),
                     ", Dice_TC:", Dice_TC,
