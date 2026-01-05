@@ -676,8 +676,8 @@ def main():
     parser.add_argument(
         '--num_cases',
         type=int,
-        default=1,
-        help='Number of cases to process (None for all)'
+        default=0,
+        help='Number of cases to process (use 0 or negative for all cases)'
     )
     parser.add_argument(
         '--voxel_spacing',
@@ -740,7 +740,8 @@ def main():
     # Get case directories
     case_dirs = sorted([d for d in data_dir.iterdir() if d.is_dir() and d.name.startswith('BraTS')])
 
-    if args.num_cases:
+    # Limit number of cases (if num_cases > 0, otherwise process all)
+    if args.num_cases > 0:
         case_dirs = case_dirs[:args.num_cases]
 
     print(f"Processing {len(case_dirs)} cases...")
