@@ -582,66 +582,64 @@ def process_single_case(
     # Analyze volume and count
     stats = analyzer.analyze_segmentation(seg_data)
 
-    # Generate visual content (middle slice and optional videos)
-    temp_dir = tempfile.mkdtemp()
-    flair_video_path = None
-    overlay_video_path = None
-    middle_slice_path = None
+    # Check if enriched text already exists
+    case_output_dir = output_dir / case_name
+    enriched_text_path = case_output_dir / f"{case_name}_enriched_text.txt"
 
-    try:
-        # Always create middle slice image (works with both OpenAI and Gemini)
-        middle_slice_path = os.path.join(temp_dir, f"{case_name}_middle_slice.png")
-        video_converter.create_middle_slice_image(flair_data, seg_data, middle_slice_path)
+    if enriched_text_path.exists():
+        print(f"Loading existing enriched text for {case_name}")
+        with open(enriched_text_path, 'r') as f:
+            enriched_text = f.read().strip()
+    else:
+        # Generate visual content (middle slice and optional videos)
+        temp_dir = tempfile.mkdtemp()
+        flair_video_path = None
+        overlay_video_path = None
+        middle_slice_path = None
 
-        # Generate videos if requested (Gemini only)
-        if generate_videos:
-            flair_video_path = os.path.join(temp_dir, f"{case_name}_flair.mp4")
-            overlay_video_path = os.path.join(temp_dir, f"{case_name}_overlay.mp4")
+        try:
+            # Always create middle slice image (works with both OpenAI and Gemini)
+            middle_slice_path = os.path.join(temp_dir, f"{case_name}_middle_slice.png")
+            video_converter.create_middle_slice_image(flair_data, seg_data, middle_slice_path)
 
-            video_converter.create_video_from_volume(flair_data, flair_video_path)
-            video_converter.create_overlay_video(flair_data, seg_data, overlay_video_path)
+            # Generate videos if requested (Gemini only)
+            if generate_videos:
+                flair_video_path = os.path.join(temp_dir, f"{case_name}_flair.mp4")
+                overlay_video_path = os.path.join(temp_dir, f"{case_name}_overlay.mp4")
 
-        # Enrich text with AI (with middle slice and optional videos)
-        enriched_text = text_enricher.enrich_text(
-            original_text,
-            stats,
-            flair_video_path,
-            overlay_video_path,
-            middle_slice_path
-        )
-    except Exception as e:
-        print(f"Error generating media or calling AI for {case_name}: {e}")
-        # Fallback to text-only if media generation fails
-        enriched_text = text_enricher.enrich_text(original_text, stats)
-    finally:
-        # Clean up temp directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
+                video_converter.create_video_from_volume(flair_data, flair_video_path)
+                video_converter.create_overlay_video(flair_data, seg_data, overlay_video_path)
 
-    # Encode with BioBERT
+            enriched_text = text_enricher.enrich_text(
+                original_text,
+                stats,
+                flair_video_path,
+                overlay_video_path,
+                middle_slice_path
+            )
+        except Exception as e:
+            print(f"Error generating media or calling AI for {case_name}: {e}")
+            enriched_text = text_enricher.enrich_text(original_text, stats)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     text_embedding = biobert_encoder.encode(enriched_text)
 
-    # Save outputs
-    case_output_dir = output_dir / case_name
     case_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save enriched text
-    enriched_text_path = case_output_dir / f"{case_name}_enriched_text.txt"
-    with open(enriched_text_path, 'w') as f:
-        f.write(enriched_text)
+    if not enriched_text_path.exists():
+        with open(enriched_text_path, 'w') as f:
+            f.write(enriched_text)
 
-    # Save embedding
     embedding_path = case_output_dir / f"{case_name}_enriched_text.npy"
     np.save(embedding_path, text_embedding)
 
-    # Save statistics
     stats_path = case_output_dir / f"{case_name}_stats.json"
     with open(stats_path, 'w') as f:
         json.dump(stats, f, indent=2)
 
     return {
-        'status': 'success',
         'case_name': case_name,
-        'original_text': original_text,
         'enriched_text': enriched_text,
         'stats': stats,
         'embedding_shape': text_embedding.shape
@@ -659,7 +657,7 @@ def main():
     parser.add_argument(
         '--output_dir',
         type=str,
-        default='/Disk1/afrouz/Data/Merged_Enriched',
+        default='/Disk1/afrouz/Data/Merged',
         help='Path to output directory'
     )
     parser.add_argument(
@@ -761,18 +759,14 @@ def main():
             )
             results.append(result)
 
-            if result['status'] == 'success':
-                print(f"\n{'='*80}")
-                print(f"Case: {result['case_name']}")
-                print(f"\nOriginal Text:\n{result['original_text']}")
-                print(f"\nEnriched Text:\n{result['enriched_text']}")
-                print(f"\nKey Stats:")
-                print(f"  WT Volume: {result['stats']['wt_volume_cm3']:.2f} cm³ ({result['stats']['wt_count']} lesion(s))")
-                print(f"  TC Volume: {result['stats']['tc_volume_cm3']:.2f} cm³ ({result['stats']['tc_count']} lesion(s))")
-                print(f"  ET Volume: {result['stats']['et_volume_cm3']:.2f} cm³ ({result['stats']['et_count']} lesion(s))")
-                print(f"{'='*80}\n")
-            else:
-                print(f"Error processing {case_dir.name}: {result['message']}")
+            print(f"\n{'='*80}")
+            print(f"Case: {result['case_name']}")
+            print(f"\nEnriched Text:\n{result['enriched_text']}")
+            print(f"\nKey Stats:")
+            print(f"  WT Volume: {result['stats']['wt_volume_cm3']:.2f} cm³ ({result['stats']['wt_count']} lesion(s))")
+            print(f"  TC Volume: {result['stats']['tc_volume_cm3']:.2f} cm³ ({result['stats']['tc_count']} lesion(s))")
+            print(f"  ET Volume: {result['stats']['et_volume_cm3']:.2f} cm³ ({result['stats']['et_count']} lesion(s))")
+            print(f"{'='*80}\n")
 
         except Exception as e:
             print(f"Error processing {case_dir.name}: {e}")
