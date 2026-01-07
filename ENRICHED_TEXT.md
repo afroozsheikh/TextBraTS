@@ -171,6 +171,62 @@ Potential enhancements:
 - JSON updater: [`update_text_features.py`](update_text_features.py)
 - Data loader: [`utils/data_utils.py`](utils/data_utils.py)
 
+## Experimental Observations
+
+### Performance Analysis: Original vs Enriched Text
+
+#### Key Findings
+
+After training and testing models with both original text (flair_text.npy) and enriched text (enriched_text.npy), we observed an interesting pattern:
+
+**High-Performing Cases (90%+ Dice Score)**
+- Original text: Achieves 90%+ dice scores
+- Enriched text: Performance **degrades** to ~85% dice
+- **Hypothesis**: Simple, well-defined tumors with clear boundaries don't benefit from quantitative data. The volumetric information may introduce noise/redundancy that confuses the model, causing it to over-fit to volume numbers rather than spatial features.
+
+**Lower-Performing Cases (<90% Dice Score)**
+- Original text: Struggles with accurate segmentation
+- Enriched text: Shows **improved** performance
+- **Hypothesis**: Complex, ambiguous, or multifocal tumors benefit from quantitative constraints. Volume measurements and component counts provide critical information that qualitative descriptions lack.
+
+#### Interpretation
+
+This suggests:
+1. **Information Overload**: For simple cases, enriched text adds unnecessary complexity
+2. **Critical Augmentation**: For complex cases, quantitative data fills gaps in qualitative descriptions
+3. **Case-Dependent Value**: The benefit of enriched text is not uniform across the dataset
+
+#### Implications for Model Development
+
+These observations suggest that **simple concatenation or averaging** of embeddings may be suboptimal. Instead, consider:
+
+1. **Adaptive Fusion**: Model learns to weight embeddings based on tumor complexity
+   ```python
+   gate = sigmoid(learned_function(image_features))
+   combined = gate * enriched_embedding + (1 - gate) * flair_embedding
+   ```
+
+2. **Separate Pathways**: Process each embedding independently, combine predictions
+   ```python
+   pred_flair = model_branch(flair_embedding, image)
+   pred_enriched = model_branch(enriched_embedding, image)
+   final_pred = learned_weight * pred_flair + (1-learned_weight) * pred_enriched
+   ```
+
+3. **Conditional Routing**: Detect tumor complexity and select appropriate embedding
+   - Use enriched text for large, multifocal, heterogeneous tumors
+   - Use original text for small, unifocal, well-defined tumors
+
+#### Next Steps
+
+1. **Quantify the pattern**: Analyze correlation between tumor characteristics (size, multifocality, heterogeneity) and performance delta
+2. **Implement adaptive fusion**: Let model learn when to trust each embedding type
+3. **Visualize cases**: Compare samples where each approach excels to identify distinguishing features
+
+#### Related Outputs
+- Original text results: `/Disk1/afrouz/Projects/TextBraTS/outputs/TextBraTS_conda_viz/test_visualizations.pdf`
+- Enriched text results: `/Disk1/afrouz/Projects/TextBraTS/outputs/TextBraTS_conda_enriched_text/test_visualizations.pdf`
+
 ## References
 
 - BraTS Challenge: https://www.med.upenn.edu/cbica/brats/
