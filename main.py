@@ -37,7 +37,7 @@ from sam import SAM
 
 ## within the program, these visible devices are re-indexed starting from 0. so devices 2 and 3 would be gpu 1 and 2 ---> A6000s 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2, 3"
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 
