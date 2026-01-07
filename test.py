@@ -15,6 +15,7 @@ from utils.textswin_unetr import TextSwinUNETR
 from utils.textswin_unetr_swinUnetR_V2 import TextSwinUNETR_V2
 from utils.textswin_unetr_tf_per_decoder import TextSwinUNETRTFDecoder
 from utils.textswin_unetr_jf_per_decoder import TextSwinUNETRJFDecoder
+from utils.late_fusion_wrapper import LateFusionWrapper
 import os
 import time
 import torch
@@ -146,6 +147,7 @@ parser.add_argument(
 parser.add_argument("--without_text", action="store_true", help="disable text features")
 parser.add_argument("--use_v2", action="store_true", help="use TextSwinUNETR_V2 instead of TextSwinUNETR")
 parser.add_argument("--fusion_decoder", default=None, type=str, choices=["jf", "tf"], help="text-fusion decoder type: jf (joint fusion), tf (text fusion), or none")
+parser.add_argument("--use_dual_text", action="store_true", help="use dual text features (flair + enriched) with late fusion and learnable weights (alpha=0.5)")
 parser.add_argument("--spatial_prompting", action="store_true", help="use atlas masks as spatial prompts for the network")
 parser.add_argument("--atlas_masks_dir", default="/Disk1/afrouz/Data/TextBraTS_atlas_masks", type=str, help="directory containing per-sample atlas masks")
 parser.add_argument("--visualize", action="store_true", help="generate PDF visualization of test results")
@@ -219,6 +221,13 @@ def main():
             use_text=not args.without_text,
         )
         print(f"Using TextSwinUNETR!")
+
+    # Wrap model with late fusion if using dual text
+    if args.use_dual_text:
+        model = LateFusionWrapper(base_model=model, initial_alpha=0.5)
+        print(f"Wrapped model with Late Fusion (learnable alpha, initial=0.5)")
+        print(f"{model}")
+
     model_dict = torch.load(pretrained_pth, weights_only=False)["state_dict"]
     model.load_state_dict(model_dict, strict=False)
     model.eval()
@@ -233,6 +242,8 @@ def main():
         # Storage for visualization data
         viz_data = [] if visualize else None
 
+        use_dual_text = hasattr(args, 'use_dual_text') and args.use_dual_text
+
         with torch.no_grad():
             for idx, batch_data in enumerate(loader):
                 data = batch_data["image"]
@@ -240,11 +251,21 @@ def main():
                 text = batch_data["text_feature"]
                 atlas_mask = batch_data.get("atlas_mask", None)
 
-                data, target, text = data.to(device), target.to(device), text.to(device)
+                if use_dual_text:
+                    enriched_text = batch_data["enriched_text_feature"]
+                    data, target, text, enriched_text = (
+                        data.to(device), target.to(device),
+                        text.to(device), enriched_text.to(device)
+                    )
+                else:
+                    data, target, text = data.to(device), target.to(device), text.to(device)
+
                 if atlas_mask is not None:
                     atlas_mask = atlas_mask.to(device)
 
-                if atlas_mask is not None:
+                if use_dual_text:
+                    logits = model(data, text, enriched_text)
+                elif atlas_mask is not None:
                     logits = model(data, text, atlas_mask=atlas_mask)
                 else:
                     logits = model(data, text)

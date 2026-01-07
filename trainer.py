@@ -28,15 +28,30 @@ def train_epoch(model, loader, optimizer, scaler, epoch, loss_func, args):
     model.train()
     start_time = time.time()
     run_loss = AverageMeter()
+    use_dual_text = hasattr(args, 'use_dual_text') and args.use_dual_text
+
     for idx, batch_data in enumerate(loader):
         if isinstance(batch_data, list):
             data, target, text = batch_data
         else:
             data, target, text = batch_data["image"], batch_data["label"], batch_data["text_feature"]
-        data, target, text = data.cuda(args.rank), target.cuda(args.rank), text.cuda(args.rank)
+
+        if use_dual_text:
+            # Load both text features for late fusion
+            enriched_text = batch_data["enriched_text_feature"]
+            data, target, text, enriched_text = (
+                data.cuda(args.rank), target.cuda(args.rank),
+                text.cuda(args.rank), enriched_text.cuda(args.rank)
+            )
+        else:
+            data, target, text = data.cuda(args.rank), target.cuda(args.rank), text.cuda(args.rank)
+
         optimizer.zero_grad(set_to_none=True)
         with autocast('cuda',enabled=args.amp):
-            logits = model(data,text)
+            if use_dual_text:
+                logits = model(data, text, enriched_text)
+            else:
+                logits = model(data, text)
             loss = loss_func(logits, target)
         if args.amp:
             scaler.scale(loss).backward()
@@ -62,6 +77,12 @@ def train_epoch(model, loader, optimizer, scaler, epoch, loss_func, args):
     '''for param in model.parameters():
         param.grad = None'''
     optimizer.zero_grad(set_to_none=True)
+
+    # Print fusion weight if using dual text late fusion
+    if use_dual_text and hasattr(model, 'get_fusion_weight') and args.rank == 0:
+        alpha = model.get_fusion_weight()
+        print(f"Epoch {epoch}: Fusion weight alpha={alpha:.4f} ({alpha:.1%} flair + {(1-alpha):.1%} enriched)")
+
     return run_loss.avg
 
 
@@ -69,13 +90,26 @@ def val_epoch(model, loader, epoch, acc_func, args, post_sigmoid=None, post_pred
     model.eval()
     start_time = time.time()
     run_acc = AverageMeter()
+    use_dual_text = hasattr(args, 'use_dual_text') and args.use_dual_text
 
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             data, target, text = batch_data["image"], batch_data["label"], batch_data["text_feature"]
-            data, target, text = data.cuda(args.rank), target.cuda(args.rank), text.cuda(args.rank)
+
+            if use_dual_text:
+                enriched_text = batch_data["enriched_text_feature"]
+                data, target, text, enriched_text = (
+                    data.cuda(args.rank), target.cuda(args.rank),
+                    text.cuda(args.rank), enriched_text.cuda(args.rank)
+                )
+            else:
+                data, target, text = data.cuda(args.rank), target.cuda(args.rank), text.cuda(args.rank)
+
             with autocast('cuda',enabled=args.amp):
-                logits = model(data,text)
+                if use_dual_text:
+                    logits = model(data, text, enriched_text)
+                else:
+                    logits = model(data, text)
             val_labels_list = decollate_batch(target)
             val_outputs_list = decollate_batch(logits)
             val_output_convert = [post_pred(post_sigmoid(val_pred_tensor)) for val_pred_tensor in val_outputs_list]

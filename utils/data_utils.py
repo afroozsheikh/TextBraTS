@@ -166,6 +166,8 @@ def get_loader(args):
     # Determine if we should load atlas masks
     load_atlas = hasattr(args, 'spatial_prompting') and args.spatial_prompting
 
+    # Determine if we should load dual text features for late fusion
+    use_dual_text = hasattr(args, 'use_dual_text') and args.use_dual_text
 
     # Build train transform list
     train_transform_list = []
@@ -175,9 +177,15 @@ def get_loader(args):
         print(f"Loading atlases")
         train_transform_list.append(SaveImagePathd(keys=["image"]))
 
+    # Load text features
+    text_keys = ["text_feature"]
+    if use_dual_text:
+        text_keys.append("enriched_text_feature")
+        print(f"Using dual text features for late fusion")
+
     train_transform_list.extend([
         transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
-        LoadNumpyd(keys=["text_feature"]),
+        LoadNumpyd(keys=text_keys),
     ])
 
     if load_atlas:
@@ -194,6 +202,8 @@ def get_loader(args):
     ])
 
     tensor_keys = ["image", "label", "text_feature"]
+    if use_dual_text:
+        tensor_keys.append("enriched_text_feature")
     if load_atlas:
         tensor_keys.append("atlas_mask")
 
@@ -209,7 +219,7 @@ def get_loader(args):
 
     val_transform_list.extend([
         transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
-        LoadNumpyd(keys=["text_feature"]),
+        LoadNumpyd(keys=text_keys),
     ])
 
     if load_atlas:
@@ -235,7 +245,7 @@ def get_loader(args):
 
     test_transform_list.extend([
         transforms.LoadImaged(keys=["image", "label"], reader=NibabelReader()),
-        LoadNumpyd(keys=["text_feature"]),
+        LoadNumpyd(keys=text_keys),
     ])
 
     if load_atlas:

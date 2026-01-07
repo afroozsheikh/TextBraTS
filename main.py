@@ -30,6 +30,7 @@ from utils.textswin_unetr import TextSwinUNETR
 from utils.textswin_unetr_swinUnetR_V2 import TextSwinUNETR_V2
 from utils.textswin_unetr_tf_per_decoder import TextSwinUNETRTFDecoder
 from utils.textswin_unetr_jf_per_decoder import TextSwinUNETRJFDecoder
+from utils.late_fusion_wrapper import LateFusionWrapper
 from monai.transforms import Activations, AsDiscrete, Compose
 from monai.utils.enums import MetricReduction
 import random
@@ -104,6 +105,7 @@ parser.add_argument("--seed", type=int, default=23,help="use random seed")
 parser.add_argument("--without_text", action="store_true", help="disable text features")
 parser.add_argument("--use_v2", action="store_true", help="use TextSwinUNETR_V2 instead of TextSwinUNETR")
 parser.add_argument("--fusion_decoder", default=None, type=str, choices=["jf", "tf"], help="text-fusion decoder type: jf (joint fusion), tf (text fusion), or none")
+parser.add_argument("--use_dual_text", action="store_true", help="use dual text features (flair + enriched) with late fusion and learnable weights (alpha=0.5)")
 parser.add_argument("--use_volume_loss", action="store_true", help="use volume loss from text reports")
 parser.add_argument("--volume_weight", default=0.1, type=float, help="weight for volume loss component")
 parser.add_argument("--volume_scores_path", default="losses/volume_scores.json", type=str, help="path to volume scores JSON file")
@@ -218,6 +220,12 @@ def main_worker(gpu, args):
             use_text=not args.without_text,
         )
         print(f"Using TextSwinUNETR!")
+
+    # Wrap model with late fusion if using dual text
+    if args.use_dual_text:
+        model = LateFusionWrapper(base_model=model, initial_alpha=0.5)
+        print(f"Wrapped model with Late Fusion (learnable alpha, initial=0.5)")
+        print(f"{model}")
 
     if args.resume_ckpt:
         model_dict = torch.load(pretrained_pth)["state_dict"]

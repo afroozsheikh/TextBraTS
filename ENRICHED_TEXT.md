@@ -227,6 +227,69 @@ These observations suggest that **simple concatenation or averaging** of embeddi
 - Original text results: `/Disk1/afrouz/Projects/TextBraTS/outputs/TextBraTS_conda_viz/test_visualizations.pdf`
 - Enriched text results: `/Disk1/afrouz/Projects/TextBraTS/outputs/TextBraTS_conda_enriched_text/test_visualizations.pdf`
 
+## Late Fusion Implementation
+
+### Overview
+
+To address the observation that enriched text helps some cases but hurts others, we implemented **late fusion with learnable weights**.
+
+### How It Works
+
+The model performs two forward passes and fuses predictions:
+```python
+final_prediction = alpha * flair_prediction + (1 - alpha) * enriched_prediction
+```
+
+Where `alpha` is a learnable parameter (initialized to 0.5) that the model optimizes during training.
+
+### Files Created/Modified
+
+1. **Data Preparation**:
+   - `Train_dual_text_features.json` - Training set with both text features
+   - `Test_dual_text_features.json` - Test set with both text features
+   - `create_dual_text_json.py` - Script to merge flair and enriched JSON files
+
+2. **Model**:
+   - `utils/late_fusion_wrapper.py` - LateFusionWrapper class
+   - Wraps any TextBraTS model
+   - Implements learnable alpha parameter (clamped to [0, 1])
+
+3. **Training/Testing**:
+   - `main.py` - Added `--use_dual_text` argument
+   - `trainer.py` - Updated to handle dual text embeddings
+   - `test.py` - Updated to handle dual text embeddings
+   - `utils/data_utils.py` - Updated data loader
+
+### Usage
+
+**Training:**
+```bash
+python main.py \
+    --use_ssl_pretrained \
+    --save_checkpoint \
+    --logdir=TextBraTS_late_fusion \
+    --data_dir="/Disk1/afrouz/Data/Merged/" \
+    --json_list=./Train_dual_text_features.json \
+    --use_dual_text \
+    --max_epochs=200
+```
+
+**Testing:**
+```bash
+python test.py \
+    --data_dir="/Disk1/afrouz/Data/Merged/" \
+    --json_list=./Test_dual_text_features.json \
+    --pretrained_dir="./runs/TextBraTS_late_fusion/" \
+    --use_dual_text \
+    --visualize
+```
+
+### Expected Benefits
+
+- Model learns optimal global weighting between flair and enriched text
+- Single learnable parameter (alpha) adapts to dataset characteristics
+- Computational cost: ~2x (dual forward passes)
+
 ## References
 
 - BraTS Challenge: https://www.med.upenn.edu/cbica/brats/
